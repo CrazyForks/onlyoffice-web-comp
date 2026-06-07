@@ -1,0 +1,986 @@
+import { createFetchProxy } from "../internal/editor/fetch";
+import { createXHRProxy } from "../internal/editor/xhr";
+import { EditorServer } from "../internal/editor/server";
+import io, { MockSocket, type MockSocketOptions } from "../internal/editor/socket";
+import {
+  type DocEditor,
+  type OfficeTheme,
+  type PluginMode,
+} from "../internal/editor/types";
+import { getDocumentType } from "../const";
+import type { AscWordApiCallback, AscWordApiMethod } from "../type/word-api";
+import {
+  type OnlyOfficeIframeWindow,
+} from "../type/sdk-internal";
+import {
+  ONLYOFFICE_CONTAINER_CONFIG,
+  ONLYOFFICE_EVENT_KEYS,
+  ONLYOFFICE_ID,
+  ASC_RESTRICTION_NONE,
+  ASC_RESTRICTION_VIEW,
+} from "../const";
+import {
+  type CommentChangeHandlers,
+  type CommentData,
+  type CommentInput,
+  type CommentItem,
+  isResolvedComment,
+  normalizeCommentInput,
+} from "../feature/comments";
+import { onlyofficeEventbus } from "./eventbus";
+import {
+  type RevisionChangeHandlers,
+  type RevisionItem,
+  normalizeRevisionItems,
+} from "../feature/revisions";
+import { getOnlyOfficeLang, type OnlyOfficeLang } from "../store/lang";
+import { initializeOnlyOffice } from "../util/initialize";
+
+export type CreateEditorViewOptions = {
+  isNew: boolean;
+  fileName: string;
+  file?: File;
+  url?: string;
+  loader?: (url: string) => Promise<ArrayBuffer>;
+  fileType?: string;
+  readOnly?: boolean;
+  lang?: string;
+  containerId?: string;
+  editorManager?: EditorManager;
+  editing?: boolean;
+  theme?: OfficeTheme;
+  plugins?: PluginMode;
+};
+
+let instanceIndex = 0;
+
+function getFileType(fileName: string, fileType?: string) {
+  return fileType || fileName.split(".").pop()?.toLowerCase() || "docx";
+}
+
+function getNewInstanceId() {
+  instanceIndex += 1;
+  return `onlyoffice-${instanceIndex}`;
+}
+
+type OnlyOfficeSdkApi = {
+  i1f?: (priority?: number) => void;
+  asyncFontsDocumentEndLoaded?: (priority?: number) => void;
+  ra?: { Ghj?: () => void };
+  asc_registerCallback?: (type: string, fn: AscWordApiCallback) => void;
+  asc_unregisterCallback?: (type: string, fn: AscWordApiCallback) => void;
+  asc_addComment?: (data: CommentData) => string | undefined;
+  asc_changeComment?: (id: string, data: CommentData) => void;
+  asc_removeComment?: (id: string) => void;
+  sync_ChangeCommentData?: (id: string, data: unknown, ...args: unknown[]) => unknown;
+  __ONLYOFFICE_RESOLVE_PATCHED__?: boolean;
+  asc_selectComment?: (id: string) => void;
+  asc_showComment?: (id: string) => void;
+  asc_showComments?: () => void;
+  asc_hideComments?: () => void;
+  asc_SetGlobalTrackRevisions?: (enabled: boolean) => void;
+  asc_GetGlobalTrackRevisions?: () => boolean;
+  asc_GetRevisionsChangesStack?: () => unknown[];
+  asc_AcceptChanges?: (change?: unknown) => void;
+  asc_RejectChanges?: (change?: unknown) => void;
+  asc_AcceptChangesBySelection?: (all?: boolean) => void;
+  asc_RejectChangesBySelection?: (all?: boolean) => void;
+};
+
+/** iframe 内运行时；混淆字段见 type/sdk-internal.ts，asc_* 为公开 API */
+type OnlyOfficeWindow = OnlyOfficeIframeWindow & {
+  Asc?: Omit<NonNullable<OnlyOfficeIframeWindow["Asc"]>, "editor"> & {
+    editor?: OnlyOfficeSdkApi &
+      {
+        asc_Recalculate?: () => void;
+      };
+  };
+};
+
+type ScopedIoFactory = (url?: string, options?: MockSocketOptions) => MockSocket;
+
+type OnlyOfficeParentWindow = Window & {
+  __ONLYOFFICE_SCOPED_IO__?: Record<string, ScopedIoFactory>;
+};
+
+export class EditorManager {
+  private editor: DocEditor | null = null;
+  private server: EditorServer;
+  private dirty = false;
+  private readOnly = false;
+  private editorLang: OnlyOfficeLang = getOnlyOfficeLang();
+  private uiTheme: OfficeTheme = "theme-white";
+  private instanceId = getNewInstanceId();
+  private containerId: string;
+  private plugins: PluginMode = "featured";
+  private fileName = "New Document.docx";
+  private fileType = "docx";
+  private media: Record<string, Uint8Array> = {};
+  private comments = new Map<string, CommentData>();
+
+  constructor(containerId = ONLYOFFICE_ID) {
+    this.containerId = containerId;
+    this.server = new EditorServer({
+      getState: () => ({ plugins: "none" }),
+      onUserSave: (snapshot) => this.notifyUserSave(snapshot),
+    });
+  }
+
+
+  private createScopedIo() {
+    return (url?: string, options: MockSocketOptions = {}) => {
+      const socket = io(url, options);
+
+      socket.on("connect", () => {
+        this.server.handleConnect({ socket });
+      });
+      socket.on("disconnect", () => {
+        this.server.handleDisconnect({ socket });
+      });
+
+      return socket;
+    };
+  }
+
+  private getEditorFrameElement() {
+    const frames = Array.from(
+      document.querySelectorAll<HTMLIFrameElement>('iframe[name="frameEditor"]'),
+    );
+    const matchedFrame = frames.find((frame) => {
+      try {
+        const url = new URL(frame.src, window.location.origin);
+        return url.searchParams.get("frameEditorId") === this.containerId;
+      } catch {
+        return false;
+      }
+    });
+
+    if (matchedFrame) {
+      return matchedFrame;
+    }
+
+    if (this.containerId === ONLYOFFICE_ID) {
+      return frames[0];
+    }
+
+    return document
+      .querySelector<HTMLElement>(
+        `${ONLYOFFICE_CONTAINER_CONFIG.PARENT_SELECTOR}[data-onlyoffice-container-id="${this.containerId}"]`,
+      )
+      ?.querySelector<HTMLIFrameElement>('iframe[name="frameEditor"]');
+  }
+
+  private installIframeProxies() {
+    const iframe = this.getEditorFrameElement();
+    const win = iframe?.contentWindow as OnlyOfficeWindow | undefined;
+    const iframeDoc = iframe?.contentDocument;
+
+    if (!iframeDoc || !win) {
+      throw new Error("Iframe not loaded");
+    }
+
+    if (win.__ONLYOFFICE_PROXIES_INSTALLED__) {
+      return;
+    }
+
+    const xhr = createXHRProxy(win.XMLHttpRequest, {
+      baseUrl: win.location.href,
+      shouldBypass: (url) => {
+        const pathname = new URL(url, win.location.href).pathname;
+
+        // 字体二进制由 OnlyOffice 引擎同步读取，必须走原生 XHR。
+        return (
+          pathname.includes("/sdkjs/common/AllFonts.js") ||
+          pathname.includes("/sdkjs/common/libfont/") ||
+          pathname.includes("/fonts/")
+        );
+      },
+    });
+    // iframe fetch 仅代理 OnlyOffice 文档协作请求；x2t Brotli 资源在 x2t.worker 内解压。
+    const fetchProxy = createFetchProxy(win);
+    const WorkerCtor = win.Worker;
+
+    xhr.use((request: Request) => this.server.handleRequest(request));
+    fetchProxy.use((request: Request) => this.server.handleRequest(request));
+
+    Object.assign(win, {
+      io: this.createScopedIo(),
+      XMLHttpRequest: xhr,
+      fetch: fetchProxy,
+      Worker: function Worker(url: string, options?: WorkerOptions) {
+        const u = new URL(url, location.origin);
+        return new WorkerCtor(u.href.replace(u.origin, location.origin), options);
+      },
+    });
+    win.__ONLYOFFICE_PROXIES_INSTALLED__ = true;
+  }
+
+  private getEditorFrameWindow() {
+    const iframe = this.getEditorFrameElement();
+
+    return iframe?.contentWindow as OnlyOfficeWindow | undefined;
+  }
+
+  private getSdkApi() {
+    return this.getEditorFrameWindow()?.Asc?.editor;
+  }
+
+  private requireSdkApi() {
+    const api = this.getSdkApi();
+
+    if (!api) {
+      throw new Error("OnlyOffice SDK API is not ready");
+    }
+
+    return api;
+  }
+
+  private installCommentResolveCleanup() {
+    const api = this.getSdkApi();
+
+    if (!api || api.__ONLYOFFICE_RESOLVE_PATCHED__) {
+      return;
+    }
+
+    api.__ONLYOFFICE_RESOLVE_PATCHED__ = true;
+
+    const removeResolvedComment = (id: unknown) => {
+      // OnlyOffice resolves comments through an internal change event first.
+      // Removing synchronously during that event can race its own render pass,
+      // so schedule the delete for the next tick after the resolved state lands.
+      window.setTimeout(() => {
+        api.asc_removeComment?.(String(id));
+        this.comments.delete(String(id));
+      }, 0);
+    };
+
+    const originalSyncChange = api.sync_ChangeCommentData?.bind(api);
+    if (originalSyncChange) {
+      api.sync_ChangeCommentData = (id, data, ...args) => {
+        const result = originalSyncChange(id, data, ...args);
+
+        if (isResolvedComment(data)) {
+          removeResolvedComment(id);
+        }
+
+        return result;
+      };
+    }
+
+    api.asc_registerCallback?.("asc_onChangeCommentData", (id, data) => {
+      if (!isResolvedComment(data)) {
+        return;
+      }
+
+      removeResolvedComment(id);
+    });
+  }
+
+  private getDocumentPermissions(editing: boolean) {
+    const doc = this.server.getDocument();
+    return {
+      edit: editing && doc.fileType !== "pdf",
+      chat: false,
+      rename: editing,
+      protect: editing,
+      // 允许接受/拒绝文档内已有修订；不自动进入「修订」录制模式
+      review: true,
+      print: false,
+    };
+  }
+
+  private buildEditorCustomization() {
+    return {
+      uiTheme: this.uiTheme,
+      review: {
+        trackChanges: false,
+        showReviewChanges: false,
+      },
+      features: {
+        spellcheck: {
+          change: false,
+        },
+      },
+      logo: {
+        image: location.origin + "/logo-name_black.svg",
+        imageDark: location.origin + "/logo-name_white.svg",
+        url: location.origin,
+      },
+    };
+  }
+
+  /** 文档若自带 w:trackRevisions，OnlyOffice 默认会跟进入修订模式；接入层强制关闭录制。 */
+  private applyDefaultReviewSettings() {
+    const api = this.getSdkApi();
+    api?.asc_SetGlobalTrackRevisions?.(false);
+  }
+
+  private getRestrictionSdkApi() {
+    return this.getSdkApi() as {
+      asc_setRestriction?: (type: number) => void;
+      asc_removeRestriction?: (type: number) => void;
+      asc_setCanSendChanges?: (enabled: boolean) => void;
+    } | undefined;
+  }
+
+  /** 同步 web-apps 工具栏/侧栏的 editing:disable（viewMode 与只读一致）。 */
+  private syncShellEditingDisable(disabled: boolean) {
+    const nc = this.getEditorFrameWindow()?.Common?.NotificationCenter;
+    if (!nc?.trigger) {
+      return;
+    }
+
+    nc.trigger("editing:disable", disabled, {
+      viewMode: disabled,
+      reviewMode: false,
+      fillFormMode: false,
+      viewDocMode: false,
+      allowMerge: true,
+      allowSignature: false,
+      allowProtect: false,
+      rightMenu: { clear: false, disable: true },
+      statusBar: true,
+      leftMenu: { disable: false, previewMode: disabled },
+      fileMenu: false,
+      navigation: { disable: false, previewMode: disabled },
+      comments: { disable: false, previewMode: disabled },
+      chat: false,
+      review: true,
+      viewport: false,
+    });
+  }
+
+  /**
+   * processRightsChange(true) 在 OnlyOffice 内无效果；false 会 asc_coAuthoringDisconnect 且 mode.isEdit=false。
+   * 本地/mock 场景用 asc_setRestriction + 外壳 UI 同步，避免切回编辑仍停留在只读。
+   */
+  private restoreShellEditMode() {
+    const win = this.getEditorFrameWindow() as OnlyOfficeIframeWindow & {
+      getApplication?: () => {
+        getController?: (name: string) => { mode?: { isEdit?: boolean; canEdit?: boolean } };
+      };
+    };
+
+    const main =
+      win?.getApplication?.()?.getController?.("Main") ??
+      (win as { DE?: { getController?: (name: string) => { mode?: { isEdit?: boolean; canEdit?: boolean } } } })
+        .DE?.getController?.("Main");
+
+    if (main?.mode) {
+      main.mode.isEdit = true;
+      main.mode.canEdit = true;
+    }
+
+    this.getRestrictionSdkApi()?.asc_setCanSendChanges?.(true);
+  }
+
+  private async captureDocumentIfDirty() {
+    if (!this.editor || this.readOnly || !this.dirty) {
+      return;
+    }
+
+    await this.server.captureCurrentDocument(() => {
+      this.installIframeProxies();
+      this.editor?.downloadAs("bin");
+    });
+    this.dirty = false;
+  }
+
+  private destroyDocEditorInstance() {
+    this.editor?.destroyEditor?.();
+    this.editor = null;
+    this.comments.clear();
+  }
+
+  /** 语言写在 iframe URL 的 lang 参数里，运行时 refreshFile 不会更新界面语言。 */
+  private mountDocEditor() {
+    const doc = this.server.getDocument();
+    const user = this.server.getUser();
+    const documentType = getDocumentType(doc.fileType);
+    const editing = !this.readOnly;
+
+    this.server.setClient({
+      buildVersion: window.DocsAPI!.DocEditor.version(),
+    });
+
+    this.editor = new window.DocsAPI!.DocEditor(this.containerId, {
+      document: {
+        fileType: doc.fileType,
+        key: doc.key,
+        title: doc.title,
+        url: doc.url,
+        permissions: this.getDocumentPermissions(editing),
+      },
+      documentType,
+      editorConfig: {
+        lang: this.editorLang,
+        coEditing: {
+          mode: "fast",
+          change: false,
+        },
+        user: {
+          ...user,
+        },
+        customization: this.buildEditorCustomization(),
+      },
+      events: {
+        onAppReady: () => {
+          this.installIframeProxies();
+        },
+        onDocumentReady: () => {
+          this.installCommentResolveCleanup();
+          this.applyDefaultReviewSettings();
+          onlyofficeEventbus.emit(ONLYOFFICE_EVENT_KEYS.DOCUMENT_READY, {
+            fileName: doc.title,
+            fileType: doc.fileType,
+            instanceId: this.instanceId,
+          });
+
+          if (this.readOnly) {
+            this.syncEditingRights(false);
+          }
+        },
+        onDocumentStateChange: (event: { data: boolean }) => {
+          if (event.data) {
+            this.dirty = true;
+          }
+        },
+        onSaveDocument: (event: { data?: unknown }) => {
+          this.handleSaveDocumentEvent(event);
+        },
+        onDownloadAs: () => {
+          // Required so DocsAPI.downloadAs can request the current editor binary.
+        },
+        onSave: () => {
+          this.notifyUserSave();
+        },
+        writeFile: async () => {
+          this.notifyUserSave();
+        },
+      },
+      type: "desktop",
+      width: "100%",
+      height: "100%",
+    });
+  }
+
+  private buildRefreshFileConfig(editing: boolean) {
+    const doc = this.server.getDocument();
+    return {
+      document: {
+        fileType: doc.fileType,
+        key: doc.key,
+        title: doc.title,
+        url: doc.url,
+        permissions: this.getDocumentPermissions(editing),
+      },
+      documentType: getDocumentType(doc.fileType),
+      editorConfig: {
+        mode: editing ? "edit" : "view",
+        lang: this.editorLang,
+      },
+      type: "desktop",
+      width: "100%",
+      height: "100%",
+    };
+  }
+
+  private syncEditingRights(editing: boolean) {
+    if (!this.editor) {
+      return;
+    }
+
+    const sdk = this.getRestrictionSdkApi();
+
+    if (sdk?.asc_setRestriction) {
+      if (editing) {
+        sdk.asc_removeRestriction?.(ASC_RESTRICTION_VIEW);
+        sdk.asc_setRestriction(ASC_RESTRICTION_NONE);
+        this.restoreShellEditMode();
+      } else {
+        sdk.asc_setRestriction(ASC_RESTRICTION_VIEW);
+      }
+      this.syncShellEditingDisable(!editing);
+      return;
+    }
+
+    if (editing) {
+      this.restoreShellEditMode();
+      this.syncShellEditingDisable(false);
+      this.editor.refreshFile?.(this.buildRefreshFileConfig(true));
+    } else {
+      this.editor.denyEditingRights?.("");
+      this.syncShellEditingDisable(true);
+    }
+  }
+
+  private createExportData(snapshot: ReturnType<EditorServer["getDocumentSnapshot"]>) {
+    const binData = snapshot.binData;
+
+    if (!binData) {
+      throw new Error("No OnlyOffice document data is available to export");
+    }
+
+    return {
+      fileName: snapshot.fileName || this.fileName,
+      fileType: snapshot.fileType || this.fileType,
+      binData,
+      instanceId: this.instanceId,
+      media: {
+        ...snapshot.media,
+        ...this.media,
+      },
+    };
+  }
+
+  private userSaveTimer: number | null = null;
+  private pendingUserSaveSnapshot: ReturnType<
+    EditorServer["getDocumentSnapshot"]
+  > | null = null;
+
+  /** 用户保存：更新快照并广播 SAVE_DOCUMENT + ONSAVE（同 tick 内合并重复回调）。 */
+  private notifyUserSave(
+    snapshot?: ReturnType<EditorServer["getDocumentSnapshot"]>,
+  ) {
+    if (snapshot) {
+      this.pendingUserSaveSnapshot = snapshot;
+    }
+
+    if (this.userSaveTimer !== null) {
+      window.clearTimeout(this.userSaveTimer);
+    }
+
+    this.userSaveTimer = window.setTimeout(() => {
+      this.userSaveTimer = null;
+      this.dirty = false;
+
+      const snap =
+        this.pendingUserSaveSnapshot ?? this.server.getDocumentSnapshot();
+      this.pendingUserSaveSnapshot = null;
+
+      const data = this.createExportData(snap);
+      onlyofficeEventbus.emit(ONLYOFFICE_EVENT_KEYS.SAVE_DOCUMENT, data);
+      onlyofficeEventbus.emit(ONLYOFFICE_EVENT_KEYS.ONSAVE, {
+        fileName: data.fileName,
+        instanceId: this.instanceId,
+      });
+    }, 0);
+  }
+
+  private handleSaveDocumentEvent(event: { data?: unknown }) {
+    const payload = event?.data;
+    const buffer =
+      payload instanceof ArrayBuffer
+        ? payload
+        : payload instanceof Uint8Array
+          ? payload.buffer.slice(
+              payload.byteOffset,
+              payload.byteOffset + payload.byteLength,
+            )
+          : undefined;
+
+    if (buffer) {
+      this.server.commitUserSave(new Uint8Array(buffer));
+      return;
+    }
+
+    this.notifyUserSave();
+  }
+
+  async create(options: CreateEditorViewOptions) {
+    this.destroy();
+    this.plugins = options.plugins || "featured";
+    this.readOnly = !!options.readOnly;
+    this.containerId = options.containerId || this.containerId || ONLYOFFICE_ID;
+
+    const fileType = getFileType(options.fileName, options.fileType);
+    this.fileName = options.fileName;
+    this.fileType = fileType;
+    this.media = {};
+    this.comments.clear();
+
+    if (options.isNew) {
+      this.server.openNew(fileType);
+    } else if (options.file) {
+      await this.server.open(options.file, {
+        fileName: options.fileName,
+        fileType,
+      });
+    } else if (options.url) {
+      await this.server.openUrl(options.url, {
+        fileName: options.fileName,
+        fileType,
+        loader: options.loader,
+      });
+    } else {
+      throw new Error("OnlyOffice requires a file, url, or new document type");
+    }
+
+    await initializeOnlyOffice();
+
+    this.editorLang = (options.lang as OnlyOfficeLang | undefined) || getOnlyOfficeLang();
+    this.uiTheme = options.theme || "theme-white";
+
+    this.mountDocEditor();
+
+    return this;
+  }
+
+  exists() {
+    return !!this.editor;
+  }
+
+  /** 通过 downloadAs 取当前 bin，不销毁 iframe；只读时直接用已缓存快照。 */
+  async export() {
+    const snapshot =
+      this.editor && !this.readOnly
+        ? await this.server.captureCurrentDocument(() => {
+            this.installIframeProxies();
+            this.editor?.downloadAs("bin");
+          })
+        : this.server.getDocumentSnapshot();
+    const data = this.createExportData(snapshot);
+
+    onlyofficeEventbus.emit(ONLYOFFICE_EVENT_KEYS.SAVE_DOCUMENT, data);
+
+    return data;
+  }
+
+  /** 就地切换权限，不销毁 iframe、不 refreshFile（主路径 asc_setRestriction）。 */
+  setReadOnly(readOnly: boolean) {
+    if (this.readOnly === readOnly) {
+      return;
+    }
+
+    this.readOnly = readOnly;
+    this.syncEditingRights(!readOnly);
+  }
+
+  getReadOnly() {
+    return this.readOnly;
+  }
+
+  async setLanguage(lang: OnlyOfficeLang) {
+    if (this.editorLang === lang) {
+      return;
+    }
+
+    this.editorLang = lang;
+
+    if (!this.editor) {
+      return;
+    }
+
+    onlyofficeEventbus.emit(ONLYOFFICE_EVENT_KEYS.LOADING_CHANGE, {
+      loading: true,
+    });
+
+    try {
+      await this.captureDocumentIfDirty();
+      this.destroyDocEditorInstance();
+      this.mountDocEditor();
+    } finally {
+      onlyofficeEventbus.emit(ONLYOFFICE_EVENT_KEYS.LOADING_CHANGE, {
+        loading: false,
+      });
+    }
+  }
+
+  getInstanceId() {
+    return this.instanceId;
+  }
+
+  getContainerId() {
+    return this.containerId;
+  }
+
+  getFileName() {
+    return this.fileName;
+  }
+
+  getContainerParentSelector() {
+    return `${ONLYOFFICE_CONTAINER_CONFIG.PARENT_SELECTOR}[data-onlyoffice-container-id="${this.containerId}"], ${ONLYOFFICE_CONTAINER_CONFIG.PARENT_SELECTOR}`;
+  }
+
+  getContainerStyle() {
+    return ONLYOFFICE_CONTAINER_CONFIG.STYLE;
+  }
+
+  updateMedia(key: string, data: Uint8Array) {
+    this.media[key] = data;
+  }
+
+  getMedia() {
+    return { ...this.media };
+  }
+
+  isDirty() {
+    return this.dirty;
+  }
+
+  async subscribe({
+    type,
+    fn,
+  }: {
+    type: AscWordApiMethod;
+    fn: AscWordApiCallback;
+  }) {
+    const api = this.requireSdkApi();
+
+    if (!api.asc_registerCallback || !api.asc_unregisterCallback) {
+      throw new Error("OnlyOffice callback subscription is not supported");
+    }
+
+    api.asc_registerCallback(type, fn);
+
+    return () => {
+      api.asc_unregisterCallback?.(type, fn);
+    };
+  }
+
+  getAllComments(): CommentItem[] {
+    return Array.from(this.comments.entries()).map(([Id, Data]) => ({
+      Id,
+      Data,
+    }));
+  }
+
+  addComment(input: CommentInput) {
+    const api = this.requireSdkApi();
+    const data = normalizeCommentInput(input);
+    const id = api.asc_addComment?.(data);
+    if (id) {
+      this.comments.set(id, data);
+    }
+    return id || "";
+  }
+
+  updateComment(id: string, data: CommentData) {
+    if (isResolvedComment(data)) {
+      this.removeComment(id);
+      return;
+    }
+
+    this.requireSdkApi().asc_changeComment?.(id, data);
+    this.comments.set(id, data);
+  }
+
+  removeComment(id: string) {
+    this.requireSdkApi().asc_removeComment?.(id);
+    this.comments.delete(id);
+  }
+
+  goToComment(id: string, { showBalloon = false }: { showBalloon?: boolean } = {}) {
+    const api = this.requireSdkApi();
+    api.asc_selectComment?.(id);
+    if (showBalloon) {
+      api.asc_showComment?.(id);
+    }
+  }
+
+  async registerCommentCallbacks(handlers: CommentChangeHandlers) {
+    const unsubscribers = await Promise.all([
+      handlers.onAdd
+        ? this.subscribe({
+            type: "asc_onAddComment",
+            fn: (id, data) => {
+              const commentId = String(id);
+              const commentData = data as CommentData;
+              this.comments.set(commentId, commentData);
+              handlers.onAdd?.(commentId, commentData);
+            },
+          })
+        : undefined,
+      handlers.onChange
+        ? this.subscribe({
+            type: "asc_onChangeCommentData",
+            fn: (id, data) => {
+              const commentId = String(id);
+              const commentData = data as CommentData;
+              if (isResolvedComment(commentData)) {
+                window.setTimeout(() => {
+                  this.removeComment(commentId);
+                  handlers.onRemove?.(commentId);
+                }, 0);
+                return;
+              }
+
+              this.comments.set(commentId, commentData);
+              handlers.onChange?.(commentId, commentData);
+            },
+          })
+        : undefined,
+      handlers.onRemove
+        ? this.subscribe({
+            type: "asc_onRemoveComment",
+            fn: (id) => {
+              const commentId = String(id);
+              this.comments.delete(commentId);
+              handlers.onRemove?.(commentId);
+            },
+          })
+        : undefined,
+    ]);
+
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe?.());
+    };
+  }
+
+  setTrackRevisions(enabled: boolean) {
+    this.requireSdkApi().asc_SetGlobalTrackRevisions?.(enabled);
+  }
+
+  isTrackRevisions() {
+    return !!this.getSdkApi()?.asc_GetGlobalTrackRevisions?.();
+  }
+
+  haveRevisionsChanges() {
+    return this.getAllRevisions().length > 0;
+  }
+
+  getAllRevisions(): RevisionItem[] {
+    return normalizeRevisionItems(
+      this.getSdkApi()?.asc_GetRevisionsChangesStack?.(),
+    );
+  }
+
+  goToNextRevision() {
+    const [revision] = this.getAllRevisions();
+    if (revision) this.goToRevision(revision.Id);
+  }
+
+  goToPrevRevision() {
+    const revisions = this.getAllRevisions();
+    const revision = revisions[revisions.length - 1];
+    if (revision) this.goToRevision(revision.Id);
+  }
+
+  goToRevision(id: string) {
+    const revision = this.getAllRevisions().find((item) => item.Id === id);
+    const raw = revision?.Raw;
+    if (raw && typeof raw === "object") {
+      const candidate = raw as Record<string, unknown>;
+      const goTo =
+        candidate.GoTo ||
+        candidate.goTo ||
+        candidate.Select ||
+        candidate.select;
+
+      if (typeof goTo === "function") {
+        goTo.call(raw);
+      }
+    }
+  }
+
+  acceptRevision(revision: RevisionItem | string) {
+    const item =
+      typeof revision === "string"
+        ? this.getAllRevisions().find((entry) => entry.Id === revision)
+        : revision;
+    if (item) {
+      this.requireSdkApi().asc_AcceptChanges?.(item.Raw);
+    }
+  }
+
+  rejectRevision(revision: RevisionItem | string) {
+    const item =
+      typeof revision === "string"
+        ? this.getAllRevisions().find((entry) => entry.Id === revision)
+        : revision;
+    if (item) {
+      this.requireSdkApi().asc_RejectChanges?.(item.Raw);
+    }
+  }
+
+  acceptAllRevisions() {
+    this.requireSdkApi().asc_AcceptChanges?.();
+  }
+
+  rejectAllRevisions() {
+    this.requireSdkApi().asc_RejectChanges?.();
+  }
+
+  acceptRevisionsBySelection(all?: boolean) {
+    this.requireSdkApi().asc_AcceptChangesBySelection?.(all);
+  }
+
+  rejectRevisionsBySelection(all?: boolean) {
+    this.requireSdkApi().asc_RejectChangesBySelection?.(all);
+  }
+
+  async registerRevisionCallbacks(handlers: RevisionChangeHandlers) {
+    const unsubscribers = await Promise.all([
+      handlers.onShowChanges
+        ? this.subscribe({
+            type: "asc_onShowRevisionsChange",
+            fn: (items) =>
+              handlers.onShowChanges?.(normalizeRevisionItems(items)),
+          })
+        : undefined,
+      handlers.onTrackRevisionsChange
+        ? this.subscribe({
+            type: "asc_onOnTrackRevisionsChange",
+            fn: (enabled) => handlers.onTrackRevisionsChange?.(!!enabled),
+          })
+        : undefined,
+    ]);
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe?.());
+    };
+  }
+
+  destroy() {
+    if (this.userSaveTimer !== null) {
+      window.clearTimeout(this.userSaveTimer);
+      this.userSaveTimer = null;
+    }
+    this.pendingUserSaveSnapshot = null;
+    this.editor?.destroyEditor?.();
+    this.editor = null;
+    this.dirty = false;
+    this.comments.clear();
+  }
+}
+
+class EditorManagerFactory {
+  private defaultManager = new EditorManager();
+  private managers = new Map<string, EditorManager>();
+
+  getDefault() {
+    return this.defaultManager;
+  }
+
+  create(containerId: string) {
+    const manager = this.managers.get(containerId) || new EditorManager(containerId);
+    this.managers.set(containerId, manager);
+    return manager;
+  }
+
+  get(containerId: string) {
+    return this.managers.get(containerId) || this.create(containerId);
+  }
+
+  getAll() {
+    return [this.defaultManager, ...this.managers.values()];
+  }
+
+  destroy(containerId: string) {
+    const manager = this.managers.get(containerId);
+    manager?.destroy();
+    this.managers.delete(containerId);
+  }
+
+  destroyAll() {
+    this.defaultManager.destroy();
+    for (const manager of this.managers.values()) {
+      manager.destroy();
+    }
+    this.managers.clear();
+  }
+}
+export const editorManagerFactory = new EditorManagerFactory();
+export const editorManager = editorManagerFactory.getDefault();
+if (typeof window !== "undefined") {
+  (window as any).editorManagerFactory = editorManagerFactory;
+} 
