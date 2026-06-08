@@ -10,14 +10,11 @@
 
 ### `ONLYOFFICE_CONTAINER_CONFIG`
 
-容器挂载配置：
-
 | 字段 | 说明 |
 |------|------|
-| `ID` | 同 `ONLYOFFICE_ID` |
 | `PARENT_SELECTOR` | 父元素选择器 `.onlyoffice-container` |
 | `PARENT_CLASS_NAME` | 父元素类名 `onlyoffice-container` |
-| `STYLE` | 容器绝对定位样式 |
+| `STYLE` | 容器绝对定位样式 `{ position, inset }` |
 
 ### `ONLYOFFICE_EVENT_KEYS`
 
@@ -36,18 +33,54 @@
 
 ### `ONLYOFFICE_LANG_KEY`
 
-- `ONLYOFFICE_LANG_KEY.ZH` — `zh`
+- `ONLYOFFICE_LANG_KEY.ZH` — `zh`（**默认语言**）
 - `ONLYOFFICE_LANG_KEY.EN` — `en`
 
-### `READONLY_TIMEOUT_CONFIG`
+### `READONLY_SWITCH_MIN_DELAY_MS`
 
-见 [03-事件系统](./03-事件系统.md#等待事件)。
+只读 ↔ 编辑切换时 loading 最短展示时长，值为 `200`（ms）。
 
-### `ONLYOFFICE_RESOURCE`
+### `STATIC_RESOURCE`
 
-OnlyOffice 7.0.7 静态资源路径（`api.js`、`x2t.js`、`xlsx` 等）。
+OnlyOffice SDK 与 x2t 静态资源路径总入口。
+
+```typescript
+import { STATIC_RESOURCE } from "@/components/onlyoffice-web-comp";
+
+STATIC_RESOURCE.onlyoffice.root   // 默认 /packages/onlyoffice/9.3.0
+STATIC_RESOURCE.onlyoffice.apiUrl   // api.js 绝对 URL
+STATIC_RESOURCE.x2t.script          // x2t.js 路径
+STATIC_RESOURCE.x2t.wasm            // x2t.wasm 路径
+```
+
+可通过环境变量 `NEXT_PUBLIC_APP_ROOT` 覆盖 SDK 根路径。
+
+> `ONLYOFFICE_RESOURCE` / `X2T_RESOURCE` 已标记 `@deprecated`，请使用 `STATIC_RESOURCE`。
 
 ## 类型定义
+
+### `OnlyOfficeManagerOptions`
+
+```typescript
+type OnlyOfficeManagerOptions = {
+  containerId?: string;
+  fileType: FileType;
+  defaultFileName: string;
+  readOnly?: boolean;
+  lang?: OnlyOfficeLang;
+};
+```
+
+### `OpenDocumentInput`
+
+```typescript
+type OpenDocumentInput = {
+  fileName: string;
+  file?: File;
+  isNew?: boolean;
+  readOnly?: boolean;
+};
+```
 
 ### `DocumentReadyData`
 
@@ -55,6 +88,7 @@ OnlyOffice 7.0.7 静态资源路径（`api.js`、`x2t.js`、`xlsx` 等）。
 type DocumentReadyData = {
   fileName: string;
   fileType: string;
+  instanceId?: string;
 };
 ```
 
@@ -106,3 +140,36 @@ Word 编辑器 iframe 内 SDK 方法名联合类型，定义于 `type/word-api.t
 ```
 
 完整列表见源码 `type/word-api.ts`。
+
+## 导出清单
+
+统一从包入口导入：
+
+```typescript
+import {
+  // 门面
+  OnlyOfficeManager,
+  onlyOfficeManagerFactory,
+  // 底层
+  EditorManager,
+  editorManager,
+  editorManagerFactory,
+  createEditorView,
+  initializeOnlyOffice,
+  convertBinToDocument,
+  // 事件
+  onlyofficeEventbus,
+  ONLYOFFICE_EVENT_KEYS,
+  // 常量
+  FILE_TYPE,
+  ONLYOFFICE_ID,
+  ONLYOFFICE_CONTAINER_CONFIG,
+  ONLYOFFICE_LANG_KEY,
+  STATIC_RESOURCE,
+  // store
+  setDocmentObj,
+  getDocmentObj,
+} from "@/components/onlyoffice-web-comp";
+```
+
+类型通过 `export type *` 从 `type/word-api.ts`、`type/sdk-internal.ts` 导出。

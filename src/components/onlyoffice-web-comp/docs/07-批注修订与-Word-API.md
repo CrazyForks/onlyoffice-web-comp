@@ -2,13 +2,16 @@
 
 [← 注意事项](./06-注意事项与支持格式.md) | [概述](./00-概述.md)
 
-`EditorManager` 封装了 Word 文档的批注、修订能力，以及 OnlyOffice iframe 内 SDK 的回调订阅。
+`EditorManager` 封装了 Word 文档的批注、修订能力，以及 OnlyOffice iframe 内 SDK 的回调订阅。通过 `OnlyOfficeManager.getEditor()` 获取底层实例。
 
 ## 批注 API
 
 ```typescript
-import { editorManagerFactory } from '@/onlyoffice-comp/lib/editor-manager';
-import type { CommentInput, CommentChangeHandlers } from '@/onlyoffice-comp/lib/comments';
+import { editorManagerFactory } from "@/components/onlyoffice-web-comp";
+import type {
+  CommentInput,
+  CommentChangeHandlers,
+} from "@/components/onlyoffice-web-comp";
 
 const manager = editorManagerFactory.getDefault();
 
@@ -16,15 +19,15 @@ const manager = editorManagerFactory.getDefault();
 const comments = manager.getAllComments();
 
 // 新增（支持字符串或 CommentData 对象）
-const id = manager.addComment('请修改此处表述');
+const id = manager.addComment("请修改此处表述");
 
 // 更新 / 删除 / 跳转
-manager.updateComment(id, { Text: '已修改说明' });
+manager.updateComment(id, { Text: "已修改说明" });
 manager.removeComment(id);
 manager.goToComment(id, { showBalloon: true });
 
-// 监听批注变化（SDK 回调封装）
-const unregister = manager.registerCommentCallbacks({
+// 监听批注变化（SDK 回调封装，async）
+const unregister = await manager.registerCommentCallbacks({
   onAdd: (id, data) => {},
   onChange: (id, data) => {},
   onRemove: (id) => {},
@@ -42,7 +45,10 @@ unregister();
 ## 修订 API
 
 ```typescript
-import type { RevisionItem, RevisionChangeHandlers } from '@/onlyoffice-comp/lib/revisions';
+import type {
+  RevisionItem,
+  RevisionChangeHandlers,
+} from "@/components/onlyoffice-web-comp";
 
 manager.setTrackRevisions(true);
 const tracking = manager.isTrackRevisions();
@@ -55,16 +61,18 @@ manager.goToPrevRevision();
 manager.goToRevision(revisions[0].Id);
 
 manager.acceptRevision(revisions[0]);
-manager.rejectRevision(revisions[0].Id);
+manager.rejectRevision(revisions[0]);
 manager.acceptAllRevisions();
 manager.rejectAllRevisions();
 manager.acceptRevisionsBySelection(true);
 manager.rejectRevisionsBySelection(true);
 
-const unregisterRev = manager.registerRevisionCallbacks({
+const unregisterRev = await manager.registerRevisionCallbacks({
   onShowChanges: (items) => {},
   onTrackRevisionsChange: (enabled) => {},
-} as RevisionChangeHandlers);
+});
+
+unregisterRev();
 ```
 
 ### `RevisionItem`
@@ -79,12 +87,12 @@ const unregisterRev = manager.registerRevisionCallbacks({
 直接订阅 `AscWordApiMethod`，底层调用 `asc_registerCallback` / `asc_unregisterCallback`：
 
 ```typescript
-import type { AscWordApiMethod } from '@/onlyoffice-comp/type/word-api';
+import type { AscWordApiMethod } from "@/components/onlyoffice-web-comp";
 
 const unsubscribe = await manager.subscribe({
-  type: 'asc_onDocumentModifiedChanged' satisfies AscWordApiMethod,
+  type: "asc_onDocumentModifiedChanged" satisfies AscWordApiMethod,
   fn: (modified: unknown) => {
-    console.log('文档修改状态:', modified);
+    console.log("文档修改状态:", modified);
   },
 });
 
