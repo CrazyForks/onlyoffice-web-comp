@@ -2,7 +2,7 @@ import { converter } from "./x2t";
 import { MockSocket } from "./socket";
 import { User, Participant, AscSaveTypes, ServerOptions } from "./types";
 import { emptyDocx, emptyPdf, emptyPptx, emptyXlsx } from "./empty";
-import { getDocumentType, getFileExt } from "./utils";
+import { getDocumentType, getFileExt, getX2tConvertFormats } from "./utils";
 import { allPlugins, featuredPlugins, getPluginsData } from "./plugins";
 
 function mergeBuffers(buffers: Uint8Array[]) {
@@ -230,10 +230,13 @@ export class EditorServer {
     if (fileType == "pdf") {
       output = new Uint8Array(buffer);
     } else {
+      const { formatFrom, formatTo } = getX2tConvertFormats(fileType);
       const result = await converter.convert({
         data: buffer,
         fileFrom: "doc." + fileType,
         fileTo: "Editor.bin",
+        formatFrom,
+        formatTo,
       });
       output = result.output;
       media = result.media;
