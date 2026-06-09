@@ -14,7 +14,7 @@ export default function WordBasePage() {
       badgeClassName="bg-gradient-to-br from-blue-500 to-blue-700"
       defaultFileName="New_Document.docx"
       fileType={FILE_TYPE.DOCX}
-      accept=".docx,.doc,.odt,.rtf,.txt"
+      accept=".docx,.doc,.odt,.rtf,.txt,.docm"
       newButtonLabel="新建 Word"
     />
   );

@@ -223,7 +223,7 @@ export type EditorDocumentSnapshot = {
 };
 
 export interface ServerOptions {
-  getState?: () => { plugins: PluginMode };
+  getState?: () => { plugins: PluginMode; readOnly?: boolean };
   /** 用户触发保存（非 export/downloadAs 导出）时回调，携带最新文档快照。 */
   onUserSave?: (snapshot: EditorDocumentSnapshot) => void;
 }

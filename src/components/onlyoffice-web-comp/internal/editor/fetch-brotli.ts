@@ -97,7 +97,7 @@ export async function fetchMaybeBrotliAsset(
   return decompressBrotli(buffer);
 }
 
-/** 拉取并解码为 JS 源码（用于 Worker 内 importScripts 替代方案）。 */
+/** 拉取并解码为 JS 源码（供 Worker 内 executeEmscriptenScript 执行）。 */
 export async function fetchMaybeBrotliScript(
   url: string,
   fetchImpl: typeof fetch = fetch,

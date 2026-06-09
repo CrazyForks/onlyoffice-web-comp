@@ -328,6 +328,35 @@ async function rewriteZipFontNames(
 }
 
 /**
+ * 在 Worker 全局作用域执行 Emscripten 脚本。
+ * classic worker 用 importScripts；module worker 用间接 eval（全局作用域）。
+ */
+function executeEmscriptenScript(scriptSource: string): void {
+  if (typeof importScripts === "function") {
+    const scriptBlob = new Blob([scriptSource], {
+      type: "application/javascript",
+    });
+    const scriptBlobUrl = URL.createObjectURL(scriptBlob);
+    try {
+      importScripts(scriptBlobUrl);
+      return;
+    } catch (error) {
+      const isImportScriptsUnsupported =
+        error instanceof TypeError &&
+        String(error.message).includes("importScripts");
+      if (!isImportScriptsUnsupported) {
+        throw error;
+      }
+    } finally {
+      URL.revokeObjectURL(scriptBlobUrl);
+    }
+  }
+
+  // Module worker 不支持 importScripts；间接 eval 在 Worker 全局作用域执行。
+  (0, eval)(scriptSource);
+}
+
+/**
  * Initialize x2t module in Worker context
  */
 async function initX2t(): Promise<void> {
@@ -346,16 +375,7 @@ async function initX2t(): Promise<void> {
     wasmBinary,
   });
 
-  const scriptBlob = new Blob([scriptSource], {
-    type: "application/javascript",
-  });
-  const scriptBlobUrl = URL.createObjectURL(scriptBlob);
-
-  try {
-    importScripts(scriptBlobUrl);
-  } finally {
-    URL.revokeObjectURL(scriptBlobUrl);
-  }
+  executeEmscriptenScript(scriptSource);
 
   x2t = (self as any).Module;
 

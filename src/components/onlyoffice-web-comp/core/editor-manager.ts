@@ -4,6 +4,7 @@ import { EditorServer } from "../internal/editor/server";
 import io, { MockSocket, type MockSocketOptions } from "../internal/editor/socket";
 import {
   type DocEditor,
+  DocumentType,
   type OfficeTheme,
   type PluginMode,
 } from "../internal/editor/types";
@@ -136,7 +137,7 @@ export class EditorManager {
   constructor(containerId = ONLYOFFICE_ID) {
     this.containerId = containerId;
     this.server = new EditorServer({
-      getState: () => ({ plugins: "none" }),
+      getState: () => ({ plugins: "none", readOnly: this.readOnly }),
       onUserSave: (snapshot) => this.notifyUserSave(snapshot),
     });
   }
@@ -614,12 +615,24 @@ export class EditorManager {
     this.teardownWordContentSync();
   }
 
+  /**
+   * 初始只读与运行时切只读走同一套 asc_setRestriction。
+   * 挂载阶段若 permissions.edit=false，xlsx 等会在打开时样式/格式异常；
+   * 因此挂载时保持完整编辑权限，documentReady 后再施加只读限制。
+   */
+  private applyInitialReadOnlyState(documentType: DocumentType) {
+    this.syncEditingRights(false);
+
+    if (documentType === DocumentType.Cell) {
+      this.getSdkApi()?.asc_Recalculate?.();
+    }
+  }
+
   /** 语言写在 iframe URL 的 lang 参数里，运行时 refreshFile 不会更新界面语言。 */
   private mountDocEditor() {
     const doc = this.server.getDocument();
     const user = this.server.getUser();
     const documentType = getDocumentType(doc.fileType);
-    const editing = !this.readOnly;
 
     this.server.setClient({
       buildVersion: window.DocsAPI!.DocEditor.version(),
@@ -631,7 +644,7 @@ export class EditorManager {
         key: doc.key,
         title: doc.title,
         url: doc.url,
-        permissions: this.getDocumentPermissions(editing),
+        permissions: this.getDocumentPermissions(true),
       },
       documentType,
       editorConfig: {
@@ -660,7 +673,7 @@ export class EditorManager {
           });
 
           if (this.readOnly) {
-            this.syncEditingRights(false);
+            this.applyInitialReadOnlyState(documentType);
           }
         },
         onDocumentStateChange: (event: { data: boolean }) => {

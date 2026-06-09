@@ -110,7 +110,9 @@ export class X2tConverter {
       try {
         // Create worker using Next.js compatible syntax
         // Worker auto-initializes x2t internally
-        this.worker = new Worker(new URL("./x2t.worker.ts", import.meta.url));
+        this.worker = new Worker(new URL("./x2t.worker.ts", import.meta.url), {
+          type: "module",
+        });
 
         // Set up message handlers
         this.worker.onmessage = this.handleWorkerMessage;
