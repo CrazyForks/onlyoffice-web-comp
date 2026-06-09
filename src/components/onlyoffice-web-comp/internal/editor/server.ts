@@ -25,6 +25,57 @@ function randomId() {
   return Math.random().toString(36).substring(2, 9);
 }
 
+type CoAuthoringLockBlock =
+  | string
+  | number
+  | { guid?: string; [key: string]: unknown };
+
+function normalizeCoAuthoringLockBlocks(block: unknown): CoAuthoringLockBlock[] {
+  if (Array.isArray(block)) {
+    return block as CoAuthoringLockBlock[];
+  }
+  return [block as CoAuthoringLockBlock];
+}
+
+function getCoAuthoringLockKey(
+  block: CoAuthoringLockBlock,
+  isSpreadsheet: boolean,
+) {
+  if (
+    isSpreadsheet &&
+    typeof block === "object" &&
+    block !== null &&
+    block.guid != null
+  ) {
+    return String(block.guid);
+  }
+  return String(block);
+}
+
+function buildCoAuthoringLocks(
+  block: unknown,
+  fileType: string,
+  userId?: string,
+) {
+  const isSpreadsheet = getDocumentType(fileType) === "cell";
+  const time = +new Date();
+  const locks: Record<
+    string,
+    { time: number; user?: string; block: CoAuthoringLockBlock }
+  > = {};
+
+  for (const item of normalizeCoAuthoringLockBlocks(block)) {
+    const key = getCoAuthoringLockKey(item, isSpreadsheet);
+    locks[key] = {
+      time,
+      user: userId,
+      block: item,
+    };
+  }
+
+  return locks;
+}
+
 function getUrl(data: Uint8Array, type?: string) {
   const blob = new Blob([data as Uint8Array<ArrayBuffer>], {
     type: type || "application/octet-stream",
@@ -481,25 +532,15 @@ export class EditorServer {
           break;
         }
 
-        const blockKey = String(msg.block);
-        const lock = {
-          time: +new Date(),
-          user: user?.id,
-          block: msg.block,
-        };
-
-        send({
-          type: "getLock",
-          locks: {
-            [blockKey]: lock,
-          },
-        });
-        send({
-          type: "releaseLock",
-          locks: {
-            [blockKey]: lock,
-          },
-        });
+        {
+          const locks = buildCoAuthoringLocks(
+            msg.block,
+            this.fileType,
+            user?.id,
+          );
+          send({ type: "getLock", locks });
+          send({ type: "releaseLock", locks });
+        }
         break;
     }
   }
