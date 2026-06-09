@@ -235,29 +235,13 @@ export function isMultilineCsv(buffer: ArrayBuffer) {
   return physicalLines > logicalRows + 2;
 }
 
-/**
- * 复杂 CSV（多行单元格、嵌套逗号）走 XLSX 再 x2t，避免 x2t CSV 解析崩溃。
- */
-export async function convertCsvBufferToXlsxBuffer(buffer: ArrayBuffer) {
-  const ExcelJS = (await import("exceljs")).default;
+/** 解析 CSV 为二维数组，供 xlsx 兜底转换等场景复用。 */
+export function parseCsvBuffer(buffer: ArrayBuffer) {
   const csvEncoding = detectX2tCsvEncoding(buffer);
   const delimiter = getCsvDelimiterChar(
     detectX2tCsvDelimiter(buffer, csvEncoding),
   );
-  const rows = parseCsvText(decodeCsvBuffer(buffer, csvEncoding), delimiter);
-  const workbook = new ExcelJS.Workbook();
-  const worksheet = workbook.addWorksheet("Sheet1");
-
-  for (const row of rows) {
-    worksheet.addRow(row);
-  }
-
-  const output = await workbook.xlsx.writeBuffer();
-  if (output instanceof ArrayBuffer) {
-    return output;
-  }
-  const bytes = new Uint8Array(output as ArrayLike<number>);
-  return bytes.slice().buffer;
+  return parseCsvText(decodeCsvBuffer(buffer, csvEncoding), delimiter);
 }
 
 /**

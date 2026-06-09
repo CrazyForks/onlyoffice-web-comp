@@ -85,9 +85,9 @@ export function createFileFromDownloadedBuffer(
   const isTextFile = ["csv", "txt"].includes(extension);
 
   if (fileData instanceof ArrayBuffer) {
+    // CSV/TXT 保留原始字节，避免 UTF-8 强解破坏 GBK 等编码导致 x2t 转换失败
     if (isTextFile) {
-      const text = new TextDecoder("utf-8").decode(fileData);
-      return new File([text], fileName, { type: mimeType });
+      return new File([fileData], fileName, { type: mimeType });
     }
     const finalBuffer = resolveBinaryBuffer(fileData, extension);
     return new File([finalBuffer], fileName, { type: mimeType });

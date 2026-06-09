@@ -2,6 +2,7 @@ import { converter } from "./x2t";
 import { MockSocket } from "./socket";
 import { User, Participant, AscSaveTypes, ServerOptions } from "./types";
 import { emptyDocx, emptyPdf, emptyPptx, emptyXlsx } from "./empty";
+import { convertCsvBufferToXlsxBuffer } from "./csv-to-xlsx";
 import {
   getDocumentType,
   getFileExt,
@@ -9,7 +10,6 @@ import {
   getX2tCsvConvertOptions,
   sanitizeCsvBufferForX2t,
   isMultilineCsv,
-  convertCsvBufferToXlsxBuffer,
 } from "./utils";
 import { allPlugins, featuredPlugins, getPluginsData } from "./plugins";
 
@@ -419,8 +419,7 @@ export class EditorServer {
 
   private async loadCsvDocument(buffer: ArrayBuffer) {
     if (isMultilineCsv(buffer)) {
-      const xlsxBuffer = await convertCsvBufferToXlsxBuffer(buffer);
-      return this.convertBufferToEditorBin(xlsxBuffer, "xlsx");
+      return this.convertCsvViaXlsx(buffer);
     }
 
     const convertBuffer = sanitizeCsvBufferForX2t(buffer);
@@ -435,15 +434,19 @@ export class EditorServer {
         formatTo,
         ...getX2tCsvConvertOptions(convertBuffer),
       });
-      return { output: result.output, media: result.media };
+      if (result.output?.byteLength) {
+        return { output: result.output, media: result.media };
+      }
     } catch (err) {
-      console.warn(
-        "[EditorServer] CSV x2t failed, retry via xlsx:",
-        err,
-      );
-      const xlsxBuffer = await convertCsvBufferToXlsxBuffer(buffer);
-      return this.convertBufferToEditorBin(xlsxBuffer, "xlsx");
+      console.warn("[EditorServer] CSV x2t failed, retry via xlsx:", err);
     }
+
+    return this.convertCsvViaXlsx(buffer);
+  }
+
+  private async convertCsvViaXlsx(buffer: ArrayBuffer) {
+    const xlsxBuffer = await convertCsvBufferToXlsxBuffer(buffer);
+    return this.convertBufferToEditorBin(xlsxBuffer, "xlsx");
   }
 
   private addMedia(name: string, data: Uint8Array) {
