@@ -15,22 +15,24 @@
    Collection of static dictionary words.
 */
 
-var data = require('./dictionary-browser');
-exports.init = function() {
-  exports.dictionary = data.init();
-};
+import * as data from "./dictionary-browser";
+export let dictionary: Uint8Array;
 
-exports.offsetsByLength = new Uint32Array([
+export function init() {
+  dictionary = data.init();
+}
+
+export const offsetsByLength = new Uint32Array([
      0,     0,     0,     0,     0,  4096,  9216, 21504, 35840, 44032,
  53248, 63488, 74752, 87040, 93696, 100864, 104704, 106752, 108928, 113536,
  115968, 118528, 119872, 121280, 122016,
 ]);
 
-exports.sizeBitsByLength = new Uint8Array([
+export const sizeBitsByLength = new Uint8Array([
   0,  0,  0,  0, 10, 10, 11, 11, 10, 10,
  10, 10, 10,  9,  9,  8,  7,  7,  8,  7,
   7,  6,  6,  5,  5,
 ]);
 
-exports.minDictionaryWordLength = 4;
-exports.maxDictionaryWordLength = 24;
+export const minDictionaryWordLength = 4;
+export const maxDictionaryWordLength = 24;

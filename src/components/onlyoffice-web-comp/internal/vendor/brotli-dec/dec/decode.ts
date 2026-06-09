@@ -13,15 +13,13 @@
    limitations under the License.
 */
 
-var BrotliInput = require('./streams').BrotliInput;
-var BrotliOutput = require('./streams').BrotliOutput;
-var BrotliBitReader = require('./bit_reader');
-var BrotliDictionary = require('./dictionary');
-var HuffmanCode = require('./huffman').HuffmanCode;
-var BrotliBuildHuffmanTable = require('./huffman').BrotliBuildHuffmanTable;
-var Context = require('./context');
-var Prefix = require('./prefix');
-var Transform = require('./transform');
+import { BrotliInput, BrotliOutput } from "./streams";
+import BrotliBitReader from "./bit_reader";
+import * as BrotliDictionary from "./dictionary";
+import { HuffmanCode, BrotliBuildHuffmanTable } from "./huffman";
+import * as Context from "./context";
+import * as Prefix from "./prefix";
+import * as Transform from "./transform";
 
 var kDefaultCodeLength = 8;
 var kCodeLengthRepeatCode = 16;
@@ -560,7 +558,7 @@ function JumpToByteBoundary(br) {
   return pad_bits == 0;
 }
 
-function BrotliDecompressedSize(buffer) {
+function BrotliDecompressedSize(buffer: Uint8Array) {
   var input = new BrotliInput(buffer);
   var br = new BrotliBitReader(input);
   DecodeWindowBits(br);
@@ -568,9 +566,9 @@ function BrotliDecompressedSize(buffer) {
   return out.meta_block_length;
 }
 
-exports.BrotliDecompressedSize = BrotliDecompressedSize;
+export { BrotliDecompressedSize };
 
-function BrotliDecompressBuffer(buffer, output_size) {
+function BrotliDecompressBuffer(buffer: Uint8Array, output_size?: number | null) {
   var input = new BrotliInput(buffer);
   
   if (output_size == null) {
@@ -589,7 +587,7 @@ function BrotliDecompressBuffer(buffer, output_size) {
   return output.buffer;
 }
 
-exports.BrotliDecompressBuffer = BrotliDecompressBuffer;
+export { BrotliDecompressBuffer };
 
 function BrotliDecompress(input, output) {
   var i;
@@ -872,15 +870,15 @@ function BrotliDecompress(input, output) {
       if (distance > max_distance) {
         if (copy_length >= BrotliDictionary.minDictionaryWordLength &&
             copy_length <= BrotliDictionary.maxDictionaryWordLength) {
-          var offset = BrotliDictionary.offsetsByLength[copy_length];
+          var dictOffset = BrotliDictionary.offsetsByLength[copy_length];
           var word_id = distance - max_distance - 1;
           var shift = BrotliDictionary.sizeBitsByLength[copy_length];
           var mask = (1 << shift) - 1;
           var word_idx = word_id & mask;
           var transform_idx = word_id >> shift;
-          offset += word_idx * copy_length;
+          dictOffset += word_idx * copy_length;
           if (transform_idx < Transform.kNumTransforms) {
-            var len = Transform.transformDictionaryWord(ringbuffer, copy_dst, offset, copy_length, transform_idx);
+            var len = Transform.transformDictionaryWord(ringbuffer, copy_dst, dictOffset, copy_length, transform_idx);
             copy_dst += len;
             pos += len;
             meta_block_remaining_len -= len;
@@ -933,6 +931,6 @@ function BrotliDecompress(input, output) {
   output.write(ringbuffer, pos & ringbuffer_mask);
 }
 
-exports.BrotliDecompress = BrotliDecompress;
+export { BrotliDecompress };
 
 BrotliDictionary.init();
