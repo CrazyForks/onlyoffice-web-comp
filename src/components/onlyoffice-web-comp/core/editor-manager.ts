@@ -11,6 +11,7 @@ import {
   DocumentType,
   type OfficeTheme,
   type PluginMode,
+  type User,
 } from "../internal/editor/types";
 import { getDocumentType } from "../const";
 import type { AscWordApiCallback, AscWordApiMethod } from "../type/word-api";
@@ -52,6 +53,7 @@ export type CreateEditorViewOptions = {
   loader?: (url: string) => Promise<ArrayBuffer>;
   fileType?: string;
   readOnly?: boolean;
+  user?: User;
   lang?: string;
   containerId?: string;
   editorManager?: EditorManager;
@@ -115,6 +117,10 @@ type OnlyOfficeWindow = OnlyOfficeIframeWindow & {
 };
 
 type ScopedIoFactory = (url?: string, options?: MockSocketOptions) => MockSocket;
+
+type ShellMainController = {
+  mode?: { isEdit?: boolean; canEdit?: boolean };
+};
 
 type OnlyOfficeParentWindow = Window & {
   __ONLYOFFICE_SCOPED_IO__?: Record<string, ScopedIoFactory>;
@@ -571,10 +577,51 @@ export class EditorManager {
     } | undefined;
   }
 
+  private getShellMainController() {
+    const win = this.getEditorFrameWindow() as OnlyOfficeIframeWindow & {
+      PE?: { getController?: (name: string) => ShellMainController };
+      DE?: { getController?: (name: string) => ShellMainController };
+      getApplication?: () => {
+        getController?: (name: string) => ShellMainController;
+      };
+    };
+
+    return (
+      win?.PE?.getController?.("Main") ??
+      win?.getApplication?.()?.getController?.("Main") ??
+      win?.DE?.getController?.("Main")
+    );
+  }
+
   /** 同步 web-apps 工具栏/侧栏的 editing:disable（viewMode 与只读一致）。 */
-  private syncShellEditingDisable(disabled: boolean) {
+  private syncShellEditingDisable(
+    disabled: boolean,
+    documentType = getDocumentType(this.fileType),
+  ) {
     const nc = this.getEditorFrameWindow()?.Common?.NotificationCenter;
     if (!nc?.trigger) {
+      return;
+    }
+
+    const isSlide = documentType === DocumentType.Slide;
+
+    if (isSlide) {
+      nc.trigger("editing:disable", disabled, {
+        viewMode: disabled,
+        allowSignature: !disabled,
+        rightMenu: { clear: false, disable: true },
+        statusBar: true,
+        leftMenu: { disable: disabled, previewMode: disabled },
+        fileMenu: false,
+        comments: { disable: false, previewMode: disabled },
+        chat: false,
+        review: true,
+        viewport: disabled,
+        documentHolder: { clear: disabled, disable: true },
+        toolbar: true,
+        header: { search: false },
+        shortcuts: disabled ? false : undefined,
+      });
       return;
     }
 
@@ -595,7 +642,17 @@ export class EditorManager {
       chat: false,
       review: true,
       viewport: false,
+      documentHolder: { clear: false, disable: true },
+      toolbar: true,
     });
+  }
+
+  /** PPT 在通用只读逻辑之上追加：锁定 Main 控制器 + 禁用幻灯片侧栏。 */
+  private syncSlideReadOnlyExtras(locked: boolean) {
+    if (getDocumentType(this.fileType) !== DocumentType.Slide || !locked) {
+      return;
+    }
+    this.lockShellEditMode();
   }
 
   /**
@@ -603,16 +660,7 @@ export class EditorManager {
    * 本地/mock 场景用 asc_setRestriction + 外壳 UI 同步，避免切回编辑仍停留在只读。
    */
   private restoreShellEditMode() {
-    const win = this.getEditorFrameWindow() as OnlyOfficeIframeWindow & {
-      getApplication?: () => {
-        getController?: (name: string) => { mode?: { isEdit?: boolean; canEdit?: boolean } };
-      };
-    };
-
-    const main =
-      win?.getApplication?.()?.getController?.("Main") ??
-      (win as { DE?: { getController?: (name: string) => { mode?: { isEdit?: boolean; canEdit?: boolean } } } })
-        .DE?.getController?.("Main");
+    const main = this.getShellMainController();
 
     if (main?.mode) {
       main.mode.isEdit = true;
@@ -620,6 +668,65 @@ export class EditorManager {
     }
 
     this.getRestrictionSdkApi()?.asc_setCanSendChanges?.(true);
+  }
+
+  private lockShellEditMode() {
+    const main = this.getShellMainController();
+
+    if (main?.mode) {
+      main.mode.isEdit = false;
+      main.mode.canEdit = false;
+    }
+
+    this.getRestrictionSdkApi()?.asc_setCanSendChanges?.(false);
+  }
+
+  /** 兜底：拦截 SDK 层新增/复制幻灯片（toolbar 锁定之外）。 */
+  private installSlideStructureEditBlocker() {
+    if (getDocumentType(this.fileType) !== DocumentType.Slide) {
+      return;
+    }
+
+    const patchApi = (
+      api: {
+        AddSlide?: (...args: unknown[]) => unknown;
+        DublicateSlide?: (...args: unknown[]) => unknown;
+        __ONLYOFFICE_SLIDE_BLOCK_PATCHED__?: boolean;
+      } | undefined,
+    ) => {
+      if (!api || api.__ONLYOFFICE_SLIDE_BLOCK_PATCHED__) {
+        return;
+      }
+
+      const guard = <T extends (...args: unknown[]) => unknown>(fn?: T) => {
+        if (!fn) {
+          return fn;
+        }
+
+        const bound = fn.bind(api);
+        return (...args: unknown[]) => {
+          if (this.readOnly) {
+            return undefined;
+          }
+          return bound(...args);
+        };
+      };
+
+      api.AddSlide = guard(api.AddSlide);
+      api.DublicateSlide = guard(api.DublicateSlide);
+      api.__ONLYOFFICE_SLIDE_BLOCK_PATCHED__ = true;
+    };
+
+    patchApi(this.getSdkApi() as OnlyOfficeSdkApi);
+    patchApi(
+      (this.getShellMainController() as {
+        api?: {
+          AddSlide?: (...args: unknown[]) => unknown;
+          DublicateSlide?: (...args: unknown[]) => unknown;
+          __ONLYOFFICE_SLIDE_BLOCK_PATCHED__?: boolean;
+        };
+      })?.api,
+    );
   }
 
   private async captureDocumentIfDirty() {
@@ -648,7 +755,17 @@ export class EditorManager {
    * 因此挂载时保持完整编辑权限，documentReady 后再施加只读限制。
    */
   private applyInitialReadOnlyState(documentType: DocumentType) {
+    this.installSlideStructureEditBlocker();
     this.syncEditingRights(false);
+
+    if (documentType === DocumentType.Slide) {
+      // 工具栏 delayed render 后再锁一次，确保「新增幻灯片」按钮被 DisableToolbar 处理。
+      window.setTimeout(() => {
+        if (this.readOnly) {
+          this.syncShellEditingDisable(true, documentType);
+        }
+      }, 0);
+    }
 
     if (documentType === DocumentType.Cell) {
       this.getSdkApi()?.asc_Recalculate?.();
@@ -693,6 +810,7 @@ export class EditorManager {
         onDocumentReady: () => {
           this.installSaveShortcutBlocker();
           this.installCommentResolveCleanup();
+          this.installSlideStructureEditBlocker();
           this.applyDefaultReviewSettings();
           void this.ensureWordContentSync();
           onlyofficeEventbus.emit(ONLYOFFICE_EVENT_KEYS.DOCUMENT_READY, {
@@ -742,11 +860,13 @@ export class EditorManager {
     };
   }
 
+  /** 就地切换编辑权限（主路径 asc_setRestriction；PPT 只读额外 syncSlideReadOnlyExtras）。 */
   private syncEditingRights(editing: boolean) {
     if (!this.editor) {
       return;
     }
 
+    const documentType = getDocumentType(this.fileType);
     const sdk = this.getRestrictionSdkApi();
 
     if (sdk?.asc_setRestriction) {
@@ -756,18 +876,22 @@ export class EditorManager {
         this.restoreShellEditMode();
       } else {
         sdk.asc_setRestriction(ASC_RESTRICTION_VIEW);
+        this.syncSlideReadOnlyExtras(true);
       }
-      this.syncShellEditingDisable(!editing);
+      this.syncShellEditingDisable(!editing, documentType);
       return;
     }
 
     if (editing) {
       this.restoreShellEditMode();
-      this.syncShellEditingDisable(false);
+      this.syncShellEditingDisable(false, documentType);
       this.editor.refreshFile?.(this.buildRefreshFileConfig(true));
     } else {
-      this.editor.denyEditingRights?.("");
-      this.syncShellEditingDisable(true);
+      this.syncSlideReadOnlyExtras(true);
+      if (documentType !== DocumentType.Slide) {
+        this.editor.denyEditingRights?.("");
+      }
+      this.syncShellEditingDisable(true, documentType);
     }
   }
 
@@ -844,6 +968,9 @@ export class EditorManager {
     this.destroy();
     this.plugins = options.plugins || "featured";
     this.readOnly = !!options.readOnly;
+    if (options.user) {
+      this.server.setUser(options.user);
+    }
     this.containerId = containerId;
 
     const fileType = getFileType(options.fileName, options.fileType);
@@ -912,13 +1039,23 @@ export class EditorManager {
     return data;
   }
 
-  /** 就地切换权限，不销毁 iframe、不 refreshFile（主路径 asc_setRestriction）。 */
+  getUser(): User {
+    return this.server.getUser();
+  }
+
+  setUser(user: User) {
+    this.server.setUser(user);
+    this.editor?.setUsers?.([{ id: user.id, name: user.name }]);
+  }
+
+  /** 就地切换只读 */
   setReadOnly(readOnly: boolean) {
     if (this.readOnly === readOnly) {
       return;
     }
 
     this.readOnly = readOnly;
+    this.installSlideStructureEditBlocker();
     this.syncEditingRights(!readOnly);
   }
 
