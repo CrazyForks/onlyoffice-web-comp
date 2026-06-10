@@ -39,8 +39,11 @@ import { onlyofficeEventbus } from "./eventbus";
 import {
   type RevisionChangeHandlers,
   type RevisionItem,
-  normalizeRevisionItems,
-  flattenRevisionsReportByAuthors,
+  type RevisionsEditorApi,
+  collectRevisionItems,
+  resolveRevisionShowChanges,
+  goToRevision as goToRevisionInSdk,
+  prepareRevisionReviewDisplay,
 } from "../feature/revisions";
 import { getOnlyOfficeLang, type OnlyOfficeLang } from "../store/lang";
 import { initializeOnlyOffice } from "../util/initialize";
@@ -62,6 +65,8 @@ export type CreateEditorViewOptions = {
   plugins?: PluginMode;
   /** 由 EditorManagerFactory.beginLoadSession 生成，用于丢弃过期的异步初始化 */
   loadSession?: number;
+  /** 修订审阅页：开启 markup 显示与页边修订气泡 */
+  revisionReview?: boolean;
 };
 
 let instanceIndex = 0;
@@ -97,6 +102,13 @@ type OnlyOfficeSdkApi = {
   asc_GetTrackRevisionsReportByAuthors?: () => Record<string, unknown[]>;
   asc_BeginViewModeInReview?: (finalMode?: boolean) => void;
   asc_EndViewModeInReview?: () => void;
+  asc_SetLocalTrackRevisions?: (enabled: boolean) => void;
+  asc_GetNextRevisionsChange?: () => unknown;
+  asc_GetPrevRevisionsChange?: () => unknown;
+  asc_FollowRevisionMove?: (change: unknown) => void;
+  pluginMethod_MoveToNextReviewChange?: (next: boolean) => void;
+  pluginMethod_SetDisplayModeInReview?: (mode: string) => void;
+  te?: () => unknown;
   asc_AcceptChanges?: (change?: unknown) => void;
   asc_RejectChanges?: (change?: unknown) => void;
   asc_AcceptChangesBySelection?: (all?: boolean) => void;
@@ -146,6 +158,8 @@ export class EditorManager {
   private media: Record<string, Uint8Array> = {};
   private comments = new Map<string, CommentData>();
   private revisions: RevisionItem[] = [];
+  private refreshingRevisions = false;
+  private revisionReviewMode = false;
   private wordContentSyncPromise: Promise<void> | null = null;
   private wordContentSyncTeardown: (() => void) | null = null;
 
@@ -335,8 +349,10 @@ export class EditorManager {
         },
       },
       review: {
-        trackChanges: false,
+        trackChanges: this.revisionReviewMode,
+        // showReviewChanges:true 会在加载时弹出 asc-window review-changes modal-dlg
         showReviewChanges: false,
+        ...(this.revisionReviewMode ? { reviewDisplay: "markup" as const } : {}),
       },
       features: {
         spellcheck: {
@@ -414,30 +430,36 @@ export class EditorManager {
   }
 
   private refreshRevisionsFromSdk() {
+    if (this.refreshingRevisions) return;
+
     const api = this.getSdkApi();
-    const stackItems = normalizeRevisionItems(
-      api?.asc_GetRevisionsChangesStack?.(),
-    );
-    const reportItems = flattenRevisionsReportByAuthors(
-      api?.asc_GetTrackRevisionsReportByAuthors?.(),
-    );
-
-    if (
-      stackItems.length > 0 &&
-      (reportItems.length === 0 || stackItems.length >= reportItems.length)
-    ) {
-      this.revisions = stackItems;
+    const frameWin = this.getEditorFrameWindow();
+    if (!api || !frameWin) {
+      this.revisions = [];
       return;
     }
 
-    if (reportItems.length > 0) {
-      this.revisions = reportItems;
-      return;
+    this.refreshingRevisions = true;
+    try {
+      this.revisions = collectRevisionItems(
+        api as RevisionsEditorApi,
+        frameWin,
+      );
+    } finally {
+      this.refreshingRevisions = false;
     }
+  }
 
-    if (stackItems.length > 0) {
-      this.revisions = stackItems;
-    }
+  private applyRevisionsFromSdkStack(stack: unknown) {
+    const api = this.getSdkApi();
+    const frameWin = this.getEditorFrameWindow();
+    if (!api || !frameWin) return;
+
+    this.revisions = resolveRevisionShowChanges(
+      stack,
+      api as RevisionsEditorApi,
+      frameWin,
+    );
   }
 
   private syncRevisionsAfterMutation() {
@@ -557,8 +579,8 @@ export class EditorManager {
         }),
         this.subscribe({
           type: "asc_onShowRevisionsChange",
-          fn: () => {
-            this.refreshRevisionsFromSdk();
+          fn: (stack) => {
+            this.applyRevisionsFromSdkStack(stack);
           },
         }),
       ]);
@@ -1103,6 +1125,7 @@ export class EditorManager {
     this.destroy();
     this.plugins = options.plugins || "featured";
     this.readOnly = !!options.readOnly;
+    this.revisionReviewMode = !!options.revisionReview;
     if (options.user) {
       this.server.setUser(options.user);
     }
@@ -1436,7 +1459,16 @@ export class EditorManager {
   }
 
   setTrackRevisions(enabled: boolean) {
-    this.requireSdkApi().asc_SetGlobalTrackRevisions?.(enabled);
+    const api = this.requireSdkApi() as RevisionsEditorApi;
+    api.asc_SetGlobalTrackRevisions?.(enabled);
+    api.asc_SetLocalTrackRevisions?.(enabled);
+  }
+
+  /** 修订审阅页初始化：开启追踪 + markup 显示模式（不会批量接受/拒绝） */
+  prepareRevisionReview() {
+    const api = this.requireSdkApi() as RevisionsEditorApi;
+    api.asc_SetGlobalTrackRevisions?.(true);
+    prepareRevisionReviewDisplay(api, this.getEditorFrameWindow());
   }
 
   isTrackRevisions() {
@@ -1467,31 +1499,30 @@ export class EditorManager {
   }
 
   goToNextRevision() {
-    const [revision] = this.getAllRevisions();
-    if (revision) this.goToRevision(revision.Id);
+    (this.getSdkApi() as RevisionsEditorApi | undefined)?.asc_GetNextRevisionsChange?.();
   }
 
   goToPrevRevision() {
-    const revisions = this.getAllRevisions();
-    const revision = revisions[revisions.length - 1];
-    if (revision) this.goToRevision(revision.Id);
+    (this.getSdkApi() as RevisionsEditorApi | undefined)?.asc_GetPrevRevisionsChange?.();
   }
 
   goToRevision(id: string) {
-    const revision = this.getAllRevisions().find((item) => item.Id === id);
-    const raw = revision?.Raw;
-    if (raw && typeof raw === "object") {
-      const candidate = raw as Record<string, unknown>;
-      const goTo =
-        candidate.GoTo ||
-        candidate.goTo ||
-        candidate.Select ||
-        candidate.select;
+    const api = this.getSdkApi();
+    const frameWin = this.getEditorFrameWindow();
+    if (!api || !frameWin) return;
 
-      if (typeof goTo === "function") {
-        goTo.call(raw);
-      }
+    let cached = this.revisions.find((entry) => entry.Id === id);
+    if (!cached) {
+      this.refreshRevisionsFromSdk();
+      cached = this.revisions.find((entry) => entry.Id === id);
     }
+
+    goToRevisionInSdk(
+      cached ?? id,
+      api as RevisionsEditorApi,
+      frameWin,
+      this.revisions,
+    );
   }
 
   acceptRevision(revision: RevisionItem | string) {
@@ -1537,8 +1568,19 @@ export class EditorManager {
       handlers.onShowChanges
         ? this.subscribe({
             type: "asc_onShowRevisionsChange",
-            fn: (items) =>
-              handlers.onShowChanges?.(normalizeRevisionItems(items)),
+            fn: (stack) => {
+              const api = this.getSdkApi();
+              const frameWin = this.getEditorFrameWindow();
+              if (!api || !frameWin) return;
+
+              handlers.onShowChanges?.(
+                resolveRevisionShowChanges(
+                  stack,
+                  api as RevisionsEditorApi,
+                  frameWin,
+                ),
+              );
+            },
           })
         : undefined,
       handlers.onTrackRevisionsChange

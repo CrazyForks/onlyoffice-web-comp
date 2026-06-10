@@ -77,10 +77,20 @@ unregisterRev();
 
 ### `RevisionItem`
 
-- `Id` — 如 `rev-0`
-- `Index` — 在栈中的序号
-- `Data` — 修订元数据（类型、作者、时间等）
-- `Raw` — SDK 原始对象，供接受/拒绝使用
+- `Id` — 如 `rev-0` 或 SDK 元素 id
+- `Index` — 在列表中的序号
+- `Data` — `RevisionData` 修订元数据（`TypeName`、`UserName`、`Value`、`DateTime` 等）
+- `Raw` — SDK 原始对象，供接受/拒绝/跳转使用
+
+### `RevisionData`
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `Type` | `number` | SDK 修订类型枚举值 |
+| `TypeName` | `string` | 如 `TextAdd`、`TextRem`、`ParaPr` |
+| `UserName` | `string` | 修订作者 |
+| `DateTime` | `string` | 修订时间（SDK 格式化字符串） |
+| `Value` | `string` | 修订内容摘要 |
 
 ## `subscribe` — Word SDK 回调
 
