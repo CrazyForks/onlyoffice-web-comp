@@ -523,11 +523,18 @@ function collectRevisionRawsFromWq(
 function readRevisionStack(
   api: RevisionsEditorApi,
   allowSyncEnd: boolean,
+  forceRefresh = false,
 ): SdkRevisionElement[] {
-  const existing = (api.asc_GetRevisionsChangesStack?.() ??
-    []) as SdkRevisionElement[];
-  if (existing.length > 0 || !allowSyncEnd || syncingRevisionStack) {
-    return existing;
+  if (!forceRefresh) {
+    const existing = (api.asc_GetRevisionsChangesStack?.() ??
+      []) as SdkRevisionElement[];
+    if (existing.length > 0 || !allowSyncEnd || syncingRevisionStack) {
+      return existing;
+    }
+  }
+
+  if (!allowSyncEnd || syncingRevisionStack) {
+    return (api.asc_GetRevisionsChangesStack?.() ?? []) as SdkRevisionElement[];
   }
 
   syncingRevisionStack = true;
@@ -563,6 +570,8 @@ function mapRevisionItems(
 export type CollectRevisionItemsOptions = {
   /** 为 false 时不调用 sync_EndCatchRevisionsChanges，避免 asc_onShowRevisionsChange 递归 */
   allowSyncEnd?: boolean;
+  /** accept/reject 后强制重建修订栈，避免 asc_GetRevisionsChangesStack 返回旧缓存 */
+  forceRefreshStack?: boolean;
 };
 
 /** v9 Wq → v7 Yq+T8 → 报告 → 修订栈 */
@@ -571,7 +580,7 @@ export function collectRevisionItems(
   frameWin: Window,
   options: CollectRevisionItemsOptions = {},
 ): RevisionItem[] {
-  const { allowSyncEnd = true } = options;
+  const { allowSyncEnd = true, forceRefreshStack = false } = options;
   ensureRevisionsIndexed(api);
   const enums = getAscRevisionEnums(frameWin);
   const revId = (raw: SdkRevisionElement, i: number) =>
@@ -623,7 +632,7 @@ export function collectRevisionItems(
     if (raws.length > 0) return mapRevisionItems(raws, enums, revId);
   }
 
-  const stack = readRevisionStack(api, allowSyncEnd);
+  const stack = readRevisionStack(api, allowSyncEnd, forceRefreshStack);
   return mapRevisionItems(stack, enums, (_, i) => `rev-stack-${i}`);
 }
 
@@ -794,4 +803,33 @@ export function goToRevision(
   }
 
   return focusRevisionInDocument(api, doc, raw, data, frameWin, index);
+}
+
+/**
+ * 接受/拒绝单条修订：先定位并激活，再用 Wq 索引中的最新 Raw，避免误处理其它修订。
+ */
+export function applyRevisionChange(
+  mode: "accept" | "reject",
+  target: string | RevisionItem,
+  api: RevisionsEditorApi,
+  frameWin: Window,
+  cachedItems?: RevisionItem[],
+): boolean {
+  const item = resolveRevisionTarget(target, api, frameWin, cachedItems);
+  if (!item?.Raw) {
+    return false;
+  }
+
+  goToRevision(item, api, frameWin, cachedItems);
+
+  const doc = getLogicDocument(api);
+  const raw = doc ? resolveFreshRevisionRaw(doc, item.Raw) : item.Raw;
+
+  if (mode === "accept") {
+    api.asc_AcceptChanges?.(raw);
+  } else {
+    api.asc_RejectChanges?.(raw);
+  }
+
+  return true;
 }

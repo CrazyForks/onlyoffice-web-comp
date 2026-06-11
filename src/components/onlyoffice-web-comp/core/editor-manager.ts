@@ -43,6 +43,7 @@ import {
   collectRevisionItems,
   resolveRevisionShowChanges,
   goToRevision as goToRevisionInSdk,
+  applyRevisionChange,
   prepareRevisionReviewDisplay,
 } from "../feature/revisions";
 import { getOnlyOfficeLang, type OnlyOfficeLang } from "../store/lang";
@@ -98,7 +99,7 @@ type OnlyOfficeSdkApi = {
   asc_SetGlobalTrackRevisions?: (enabled: boolean) => void;
   asc_GetGlobalTrackRevisions?: () => boolean;
   asc_GetRevisionsChangesStack?: () => unknown[];
-  asc_HaveRevisionsChanges?: () => boolean;
+  asc_HaveRevisionsChanges?: (all?: boolean) => boolean;
   asc_GetTrackRevisionsReportByAuthors?: () => Record<string, unknown[]>;
   asc_BeginViewModeInReview?: (finalMode?: boolean) => void;
   asc_EndViewModeInReview?: () => void;
@@ -429,7 +430,7 @@ export class EditorManager {
     this.mergeCommentItems(this.fetchCommentsFromSdk());
   }
 
-  private refreshRevisionsFromSdk() {
+  private refreshRevisionsFromSdk(options?: { forceRefreshStack?: boolean }) {
     if (this.refreshingRevisions) return;
 
     const api = this.getSdkApi();
@@ -444,6 +445,7 @@ export class EditorManager {
       this.revisions = collectRevisionItems(
         api as RevisionsEditorApi,
         frameWin,
+        options,
       );
     } finally {
       this.refreshingRevisions = false;
@@ -463,19 +465,16 @@ export class EditorManager {
   }
 
   private syncRevisionsAfterMutation() {
-    this.refreshRevisionsFromSdk();
-
-    if (!this.haveRevisionsChanges()) {
-      this.revisions = [];
-    }
+    this.refreshRevisionsFromSdk({ forceRefreshStack: true });
   }
 
   private applyAllRevisionChanges(mode: "accept" | "reject") {
-    const api = this.requireSdkApi();
-    const applyOne =
-      mode === "accept"
-        ? (raw: unknown) => api.asc_AcceptChanges?.(raw)
-        : (raw: unknown) => api.asc_RejectChanges?.(raw);
+    const api = this.requireSdkApi() as RevisionsEditorApi;
+    const frameWin = this.getEditorFrameWindow();
+    if (!frameWin) {
+      return;
+    }
+
     const applyBulk =
       mode === "accept"
         ? () => api.asc_AcceptChanges?.()
@@ -486,7 +485,7 @@ export class EditorManager {
     let lastCount = this.getAllRevisions().length;
 
     while (this.haveRevisionsChanges() && guard++ < 20) {
-      this.refreshRevisionsFromSdk();
+      this.refreshRevisionsFromSdk({ forceRefreshStack: true });
       const [first] = this.revisions;
 
       if (!first) {
@@ -495,7 +494,7 @@ export class EditorManager {
         continue;
       }
 
-      applyOne(first.Raw);
+      applyRevisionChange(mode, first, api, frameWin, this.revisions);
       this.syncRevisionsAfterMutation();
 
       const nextCount = this.getAllRevisions().length;
@@ -1476,25 +1475,21 @@ export class EditorManager {
   }
 
   haveRevisionsChanges() {
-    const api = this.getSdkApi();
+    const api = this.getSdkApi() as RevisionsEditorApi | undefined;
     if (typeof api?.asc_HaveRevisionsChanges === "function") {
-      return !!api.asc_HaveRevisionsChanges();
+      if (api.asc_HaveRevisionsChanges(true)) {
+        return true;
+      }
+      if (api.asc_HaveRevisionsChanges()) {
+        return true;
+      }
     }
 
-    return this.getAllRevisions().length > 0;
+    return this.revisions.length > 0;
   }
 
   getAllRevisions(): RevisionItem[] {
     this.refreshRevisionsFromSdk();
-
-    const api = this.getSdkApi();
-    if (
-      typeof api?.asc_HaveRevisionsChanges === "function" &&
-      !api.asc_HaveRevisionsChanges()
-    ) {
-      this.revisions = [];
-    }
-
     return this.revisions;
   }
 
@@ -1526,23 +1521,41 @@ export class EditorManager {
   }
 
   acceptRevision(revision: RevisionItem | string) {
-    const item =
-      typeof revision === "string"
-        ? this.getAllRevisions().find((entry) => entry.Id === revision)
-        : revision;
-    if (item) {
-      this.requireSdkApi().asc_AcceptChanges?.(item.Raw);
+    const api = this.getSdkApi();
+    const frameWin = this.getEditorFrameWindow();
+    if (!api || !frameWin) {
+      return;
+    }
+
+    if (
+      applyRevisionChange(
+        "accept",
+        revision,
+        api as RevisionsEditorApi,
+        frameWin,
+        this.revisions,
+      )
+    ) {
       this.syncRevisionsAfterMutation();
     }
   }
 
   rejectRevision(revision: RevisionItem | string) {
-    const item =
-      typeof revision === "string"
-        ? this.getAllRevisions().find((entry) => entry.Id === revision)
-        : revision;
-    if (item) {
-      this.requireSdkApi().asc_RejectChanges?.(item.Raw);
+    const api = this.getSdkApi();
+    const frameWin = this.getEditorFrameWindow();
+    if (!api || !frameWin) {
+      return;
+    }
+
+    if (
+      applyRevisionChange(
+        "reject",
+        revision,
+        api as RevisionsEditorApi,
+        frameWin,
+        this.revisions,
+      )
+    ) {
       this.syncRevisionsAfterMutation();
     }
   }
