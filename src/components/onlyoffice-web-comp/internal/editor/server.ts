@@ -105,6 +105,75 @@ function getUrl(data: Uint8Array, type?: string) {
   return URL.createObjectURL(blob);
 }
 
+function getDataUrl(data: Uint8Array, mimeType = "application/octet-stream") {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < data.length; i += chunkSize) {
+    binary += String.fromCharCode(...data.subarray(i, i + chunkSize));
+  }
+  return `data:${mimeType};base64,${btoa(binary)}`;
+}
+
+function parseClipboardImage(input: string) {
+  const match = /^data:([^;]+);base64,(.+)$/.exec(input);
+  if (!match) {
+    return null;
+  }
+
+  const mime = match[1];
+  const binary = atob(match[2]);
+  const data = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    data[i] = binary.charCodeAt(i);
+  }
+
+  const subtype = mime.split("/")[1]?.split("+")[0] || "png";
+  const ext = subtype === "jpeg" ? "jpg" : subtype;
+  return { data, mime, ext };
+}
+
+function detectImageMime(data: Uint8Array) {
+  if (
+    data.length >= 8 &&
+    data[0] === 0x89 &&
+    data[1] === 0x50 &&
+    data[2] === 0x4e &&
+    data[3] === 0x47
+  ) {
+    return "image/png";
+  }
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (
+    data.length >= 6 &&
+    data[0] === 0x47 &&
+    data[1] === 0x49 &&
+    data[2] === 0x46
+  ) {
+    return "image/gif";
+  }
+  if (
+    data.length >= 12 &&
+    data[0] === 0x52 &&
+    data[1] === 0x49 &&
+    data[2] === 0x46 &&
+    data[3] === 0x46 &&
+    data[8] === 0x57 &&
+    data[9] === 0x45 &&
+    data[10] === 0x42 &&
+    data[11] === 0x50
+  ) {
+    return "image/webp";
+  }
+  return "image/png";
+}
+
+function getImageExt(mime: string) {
+  const subtype = mime.split("/")[1]?.split("+")[0] || "png";
+  return subtype === "jpeg" ? "jpg" : subtype;
+}
+
 export class EditorServer {
   private id = "";
   private sockets = new Set<MockSocket>();
@@ -456,9 +525,10 @@ export class EditorServer {
     return this.convertBufferToEditorBin(xlsxBuffer, "xlsx");
   }
 
-  private addMedia(name: string, data: Uint8Array) {
+  private addMedia(name: string, data: Uint8Array, mimeType?: string) {
     const pathname = "media/" + name;
-    const url = getUrl(data);
+    const mime = mimeType || detectImageMime(data);
+    const url = getDataUrl(data, mime);
     this.fsMap.set(pathname, data);
     this.urlsMap.set(pathname, url);
     return url;
@@ -560,6 +630,42 @@ export class EditorServer {
       this.messageHandlers.delete(socket);
     }
     this.sockets.delete(socket);
+  }
+
+  private handleImgUrls(
+    socket: MockSocket,
+    message: Record<string, unknown>,
+  ) {
+    const send = (...payload: unknown[]) => this.sendTo(socket, ...payload);
+    const images = Array.isArray(message.data) ? message.data : [];
+    const urls: Array<{ path: string; url: string }> = [];
+
+    for (let i = 0; i < images.length; i++) {
+      const item = images[i];
+      if (typeof item !== "string") {
+        continue;
+      }
+
+      const parsed = parseClipboardImage(item);
+      if (!parsed) {
+        continue;
+      }
+
+      const filename = `${Date.now()}_${i}.${parsed.ext}`;
+      const pathname = `media/${filename}`;
+      const url = this.addMedia(filename, parsed.data, parsed.mime);
+      urls.push({ path: pathname, url });
+    }
+
+    send({
+      type: "documentOpen",
+      data: {
+        type: "imgurls",
+        status: "ok",
+        // SDK 用 $dc(error) 判断是否弹错；缺省 undefined → qD（未知错误）
+        data: { urls, error: 0 },
+      },
+    });
   }
 
   private sendTo(socket: MockSocket, ...msg: unknown[]) {
@@ -681,6 +787,13 @@ export class EditorServer {
           send({ type: "releaseLock", locks });
         }
         break;
+      case "openDocument": {
+        const message = (msg as { message?: Record<string, unknown> }).message;
+        if (message?.c === "imgurls") {
+          this.handleImgUrls(socket, message);
+        }
+        break;
+      }
     }
   }
 
@@ -778,9 +891,10 @@ export class EditorServer {
     if (u.pathname.endsWith("/upload/" + key)) {
       const buffer = await req.arrayBuffer();
       const data = new Uint8Array(buffer);
-      const filename = Date.now() + ".png";
+      const mime = detectImageMime(data);
+      const filename = `${Date.now()}.${getImageExt(mime)}`;
       const pathname = "media/" + filename;
-      const url = this.addMedia(filename, data);
+      const url = this.addMedia(filename, data, mime);
       return Response.json({ [pathname]: url });
     }
 
