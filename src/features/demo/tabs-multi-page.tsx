@@ -1,5 +1,9 @@
 "use client";
 
+/**
+ * 多实例 Tab 演示：onlyOfficeManagerFactory 按 containerId 隔离，切换 Tab 时隐藏不销毁。
+ * 文档与完整源码说明见 `onlyoffice-web-comp/docs/09-多实例示例.md`。
+ */
 import { memo, useEffect, useRef, useState } from "react";
 import { nanoid } from "nanoid";
 import {
@@ -49,7 +53,7 @@ const DOC_PRESETS: Record<DocKind, DocPreset> = {
     badge: "W",
     fileType: FILE_TYPE.DOCX,
     defaultFileName: "New_Document.docx",
-    accept: ".docx,.doc,.odt,.rtf,.txt",
+    accept: ".docx,.doc,.docm,.odt,.rtf,.txt",
   },
   excel: {
     label: "Excel",
@@ -108,7 +112,7 @@ function createInitialTabState() {
   return { tabs: [initialTab], activeId: initialTab.id };
 }
 
-export function TabsMultiPage() {
+export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
   const [tabs, setTabs] = useState<TabItem[]>([]);
   const [activeId, setActiveId] = useState("");
   const [loading, setLoading] = useState(false);
@@ -345,11 +349,15 @@ export function TabsMultiPage() {
     }, "切换主题失败");
 
   return (
-    <div className="flex h-screen flex-col bg-neutral-100">
+    <div
+      className={`flex flex-col bg-neutral-100 ${
+        embedded ? "h-full min-h-0" : "h-screen"
+      }`}
+    >
       <header className={demoHeaderClass}>
         <div className={demoHeaderInnerClass}>
           <div className="mr-auto min-w-0">
-            <h1 className={demoTitleClass}>多实例</h1>
+            <h1 className={demoTitleClass}>{embedded ? "示例" : "多实例"}</h1>
             <p className={demoSubtitleClass}>
               {activeTab
                 ? `${activePreset?.label} · ${activeTab.fileName}`
@@ -456,7 +464,7 @@ export function TabsMultiPage() {
         </div>
       )}
 
-      <div className="relative flex-1 bg-white">
+      <div className="relative min-h-0 flex-1 bg-white">
         {tabs.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-gray-400">
             加载中...

@@ -1,11 +1,11 @@
 'use client'
 
-import StudioLayout from '@/components/studio-layout';
+import { SiteLayout } from '@/features/shell'
 
 export default function ClientLayoutWrapper({
   children,
 }: {
-  children: React.ReactNode;
+  children: React.ReactNode
 }) {
-  return <StudioLayout>{children}</StudioLayout>;
+  return <SiteLayout>{children}</SiteLayout>
 }

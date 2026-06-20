@@ -1,5 +1,9 @@
 "use client";
 
+/**
+ * 单实例演示页：OnlyOfficeManager 门面 + 工具栏（上传/导出/主题/语言/只读）。
+ * 文档说明见 `onlyoffice-web-comp/docs/08-单实例示例.md`。
+ */
 import { memo, useEffect, useRef, useState } from "react";
 import {
   ONLYOFFICE_CONTAINER_CONFIG,
@@ -31,6 +35,8 @@ type OfficePreviewPageProps = {
   newButtonLabel: string;
   /** public 目录下的默认文件路径，如 /test.xlsx */
   initialFileUrl?: string;
+  /** 嵌入文档页或父容器时使用 h-full */
+  embedded?: boolean;
 };
 
 function LoadingOverlay() {
@@ -69,6 +75,7 @@ export function OfficePreviewPage({
   accept,
   newButtonLabel,
   initialFileUrl,
+  embedded = false,
 }: OfficePreviewPageProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const managerRef = useRef<OnlyOfficeManager | null>(null);
@@ -219,7 +226,11 @@ export function OfficePreviewPage({
     }, "切换模式失败");
 
   return (
-    <div className="flex h-screen flex-col bg-white">
+    <div
+      className={`flex flex-col bg-white ${
+        embedded ? "h-full min-h-0" : "h-screen"
+      }`}
+    >
       <header className={demoHeaderClass}>
         <div className={demoHeaderInnerClass}>
           <div className="mr-auto flex min-w-0 items-baseline gap-2.5">
@@ -269,7 +280,7 @@ export function OfficePreviewPage({
         </div>
       )}
 
-      <div className="relative flex-1">
+      <div className="relative min-h-0 flex-1">
         <OnlyOfficeHost />
         {loading && <LoadingOverlay />}
       </div>

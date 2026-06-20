@@ -10,59 +10,19 @@ This repository has two parts:
 
 | Part | Path | Description |
 |------|------|-------------|
-| **Component library** | [`src/components/onlyoffice-web-comp/`](src/components/onlyoffice-web-comp/) | Reusable Web editor wrapper |
-| **Demo app** | [`src/app/`](src/app/) + [`src/components/onlyoffice-web-demo/`](src/components/onlyoffice-web-demo/) | Next.js demos and integration reference |
+| **Component library** | [`src/components/onlyoffice-web-comp/`](src/components/onlyoffice-web-comp/) | Reusable Web editor wrapper + Markdown docs |
+| **Demo site** | [`src/app/`](src/app/) + [`src/features/`](src/features/) | Next.js landing, docs, and live demos |
 
 ## Core Advantages
 
 - **Local processing**: Documents stay in the browser
-- **Format support**: Word, Excel, PowerPoint
+- **Format support**: Word, Excel, PowerPoint, CSV, DOCM, and more
 - **No backend**: Host static SDK assets only
-- **Multi-instance**: Side-by-side editors and tabbed caching
+- **Engineering APIs**: Read-only/edit toggle, theme, language, multi-instance isolation
 
-## Quick Try (Demo App)
+## Quick Try
 
-1. Visit the [live demo](https://onlyoffice-web-comp.vercel.app/) or run locally at `http://localhost:3001`
-2. Open a route:
-
-| Route | Description |
-|-------|-------------|
-| `/excel/base` | Excel single instance (loads `test.xlsx` by default) |
-| `/docs/base` | Word single instance |
-| `/ppt/base` | PowerPoint single instance |
-| `/multi/base` | Multi-instance side-by-side |
-| `/multi/tabs` | Multi-instance with tabs |
-
-3. Upload a file → edit → export
-
-### URL Parameters
-
-| Param | Description | Values |
-|-------|-------------|--------|
-| `locale` | UI language | `en`, `zh` |
-
-## Component Library Docs
-
-**API and integration details are not duplicated here.** Use the component library documentation:
-
-- **Entry**: [Component README (English)](src/components/onlyoffice-web-comp/readme.md)
-- **Full docs**: [docs/00-概述.md](src/components/onlyoffice-web-comp/docs/00-概述.md)
-
-| Doc | Topic |
-|-----|-------|
-| [01 Quick Start](src/components/onlyoffice-web-comp/docs/01-快速开始.md) | Init and container mount |
-| [02 Core API](src/components/onlyoffice-web-comp/docs/02-核心API.md) | `OnlyOfficeManager`, multi-instance |
-| [03 Events](src/components/onlyoffice-web-comp/docs/03-事件系统.md) | EventBus |
-| [04 Examples](src/components/onlyoffice-web-comp/docs/04-完整示例.md) | React examples |
-| [05 Reference](src/components/onlyoffice-web-comp/docs/05-API参考.md) | Constants and types |
-| [06 Notes](src/components/onlyoffice-web-comp/docs/06-注意事项与支持格式.md) | Prerequisites and formats |
-| [07 Comments](src/components/onlyoffice-web-comp/docs/07-批注修订与-Word-API.md) | Comments and revisions |
-
-```typescript
-import { OnlyOfficeManager, FILE_TYPE, ONLYOFFICE_ID } from "@/components/onlyoffice-web-comp";
-```
-
-## Local Development
+1. Visit the [live demo](https://onlyoffice-web-comp.vercel.app/) or run locally:
 
 ```bash
 git clone <repository-url>
@@ -72,24 +32,66 @@ pnpm dev
 # http://localhost:3001
 ```
 
+2. Open a route:
+
+| Route | Description |
+|-------|-------------|
+| `/` | Product landing page |
+| `/docs` | Component library documentation (rendered from Markdown) |
+| `/docs/demos?tab=single` | Single-instance editor demo |
+| `/docs/demos?tab=multi` | Multi-instance Tab demo |
+
+3. Upload a file → edit → export
+
+Legacy routes `/examples` and `/multi` redirect to the multi-instance demo tab.
+
+## Component Library Docs
+
+**API details live in the component library docs**, not duplicated here.
+
+- **Entry**: [Component README (English)](src/components/onlyoffice-web-comp/readme.md)
+- **Overview**: [docs/00-概述.md](src/components/onlyoffice-web-comp/docs/00-概述.md)
+
+| Doc | Topic |
+|-----|-------|
+| [01 Quick Start](src/components/onlyoffice-web-comp/docs/01-快速开始.md) | Init and container mount |
+| [02 Core API](src/components/onlyoffice-web-comp/docs/02-核心API.md) | `OnlyOfficeManager`, multi-instance |
+| [03 Events](src/components/onlyoffice-web-comp/docs/03-事件系统.md) | EventBus |
+| [04 Examples](src/components/onlyoffice-web-comp/docs/04-完整示例.md) | React integration patterns |
+| [05 Reference](src/components/onlyoffice-web-comp/docs/05-API参考.md) | Constants and types |
+| [06 Notes & Formats](src/components/onlyoffice-web-comp/docs/06-注意事项与支持格式.md) | Prerequisites and formats |
+| [07 Comments & Revisions](src/components/onlyoffice-web-comp/docs/07-批注修订与-Word-API.md) | Comments and revisions |
+| [08 Single-instance Demo](src/components/onlyoffice-web-comp/docs/08-单实例示例.md) | Single editor demo + source |
+| [09 Multi-instance Demo](src/components/onlyoffice-web-comp/docs/09-多实例示例.md) | Full Tab demo source |
+
+```typescript
+import { OnlyOfficeManager, FILE_TYPE, ONLYOFFICE_ID } from "@/components/onlyoffice-web-comp";
+```
+
 ## Project Structure
 
 ```
 onlyoffice-web-comp/
 ├── src/
-│   ├── app/                          # Next.js routes (demo entry)
-│   │   ├── excel/base/               # Excel demo
-│   │   ├── docs/base/                # Word demo
-│   │   ├── ppt/base/                 # PPT demo
-│   │   └── multi/                    # Multi-instance demos
-│   ├── components/
-│   │   ├── onlyoffice-web-comp/      # Component library + docs/
-│   │   ├── onlyoffice-web-demo/      # Demo page wrappers
-│   │   └── studio-layout/            # Demo site layout
-│   └── ...
-├── public/                           # OnlyOffice SDK static assets
-└── scripts/                          # Build tools (e.g. minify)
+│   ├── app/                              # Next.js routes
+│   │   ├── page.tsx                      # Landing
+│   │   ├── docs/                         # Documentation site
+│   │   │   ├── page.tsx                  # /docs (overview md)
+│   │   │   ├── [slug]/page.tsx           # /docs/*
+│   │   │   └── demos/page.tsx            # /docs/demos?tab=single|multi
+│   │   └── examples/                     # → redirect to multi demo
+│   ├── features/
+│   │   ├── docs/                         # Docs shell, markdown renderer, site-map
+│   │   ├── demo/                         # Live demo components
+│   │   ├── marketing/                    # Landing page
+│   │   └── shell/                        # Site header / footer / layout
+│   └── components/
+│       └── onlyoffice-web-comp/          # SDK wrapper + docs/*.md source
+├── public/                               # OnlyOffice SDK static assets
+└── ...
 ```
+
+Docs pages read Markdown directly from `src/components/onlyoffice-web-comp/docs/`. Demo tabs embed live editors from `src/features/demo/`.
 
 ## Tech Stack
 
@@ -147,7 +149,6 @@ window["__custom_font_registry__"] = {
 
 - **Keys** (e.g. `"1001"`) must match the `--id` and the filename under `fonts/`
 - **Values** are alias arrays covering every font name used in your documents
-
 
 ### 3. Built-in fonts (optional)
 

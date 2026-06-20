@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
-export default function MultiRedirectPage() {
+export default function ExamplesRedirectPage() {
   redirect("/docs/demos?tab=multi");
 }
