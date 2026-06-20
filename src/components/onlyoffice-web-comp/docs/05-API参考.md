@@ -36,6 +36,24 @@
 - `ONLYOFFICE_LANG_KEY.ZH` — `zh`（**默认语言**）
 - `ONLYOFFICE_LANG_KEY.EN` — `en`
 
+### `OFFICE_THEME`
+
+OnlyOffice 编辑器界面主题（`customization.uiTheme`）。
+
+| 常量 | 值 | 说明 |
+|------|-----|------|
+| `OFFICE_THEME.WHITE` | `theme-white` | 浅色（**默认**） |
+| `OFFICE_THEME.CLASSIC_LIGHT` | `theme-classic-light` | 经典浅色 |
+| `OFFICE_THEME.LIGHT` | `theme-light` | Light |
+| `OFFICE_THEME.DARK` | `theme-dark` | 深色 |
+| `OFFICE_THEME.NIGHT` | `theme-night` | 夜间 |
+| `OFFICE_THEME.CONTRAST_DARK` | `theme-contrast-dark` | 高对比深色 |
+
+相关导出：
+
+- `DEFAULT_OFFICE_THEME` — 默认 `OFFICE_THEME.WHITE`
+- `OFFICE_THEME_OPTIONS` — `{ id, label }[]`，供示例页 / UI 下拉使用
+
 ### `READONLY_SWITCH_MIN_DELAY_MS`
 
 只读 ↔ 编辑切换时 loading 最短展示时长，值为 `200`（ms）。
@@ -68,6 +86,7 @@ type OnlyOfficeManagerOptions = {
   defaultFileName: string;
   readOnly?: boolean;
   lang?: OnlyOfficeLang;
+  theme?: OfficeTheme;
 };
 ```
 
@@ -121,6 +140,10 @@ type LoadingChangeData = {
 };
 ```
 
+### `OfficeTheme`
+
+编辑器界面主题 ID，与 `OFFICE_THEME` 常量值一致，例如 `"theme-white"`、`"theme-dark"`。类型自 `const/index.ts` 导出为 `OfficeThemeId`，在 `EditorManager` / `OnlyOfficeManager` 中写作 `OfficeTheme`。
+
 ### `AscWordApiMethod`
 
 Word 编辑器 iframe 内 SDK 方法名联合类型，定义于 `type/word-api.ts`。用于 `EditorManager.subscribe({ type, fn })` 的 `type` 参数。
@@ -165,6 +188,9 @@ import {
   ONLYOFFICE_ID,
   ONLYOFFICE_CONTAINER_CONFIG,
   ONLYOFFICE_LANG_KEY,
+  OFFICE_THEME,
+  DEFAULT_OFFICE_THEME,
+  OFFICE_THEME_OPTIONS,
   STATIC_RESOURCE,
   // store
   setDocmentObj,
