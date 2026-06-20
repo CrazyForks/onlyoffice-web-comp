@@ -3,19 +3,17 @@ import { OfficePreviewPage } from "@/components/onlyoffice-web-demo/office-previ
 import { FILE_TYPE } from "@/components/onlyoffice-web-comp";
 
 export const metadata: Metadata = {
-  title: "Word Preview — OnlyOffice MVP",
+  title: "单实例 — OnlyOffice MVP",
 };
 
-export default function WordBasePage() {
+export default function SingleInstancePage() {
   return (
     <OfficePreviewPage
-      title="Word 预览"
-      badge="W"
-      badgeClassName="bg-gradient-to-br from-blue-500 to-blue-700"
+      title="单实例演示"
       defaultFileName="New_Document.docx"
       fileType={FILE_TYPE.DOCX}
       accept=".docx,.doc,.odt,.rtf,.txt,.docm"
-      newButtonLabel="新建 Word"
+      newButtonLabel="新建文档"
     />
   );
 }

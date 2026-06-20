@@ -5,12 +5,8 @@ import { usePathname, useRouter } from 'next/navigation'
 import { Layout, Menu, Button } from 'antd'
 import type { MenuProps } from 'antd'
 import {
-  FileExcelOutlined,
-  FileWordOutlined,
-  FilePptOutlined,
   AppstoreOutlined,
-  CodeOutlined,
-  FolderOutlined,
+  FileWordOutlined,
   GithubOutlined,
   MenuOutlined,
   CloseOutlined,
@@ -21,57 +17,14 @@ const { Sider } = Layout
 
 const menuItems: MenuProps['items'] = [
   {
-    key: '/excel',
-    icon: <FileExcelOutlined />,
-    label: 'Excel',
-    children: [
-      {
-        key: '/excel/base',
-        icon: <FolderOutlined />,
-        label: 'Base',
-      },
-    ],
-  },
-  {
-    key: '/docs',
+    key: '/single',
     icon: <FileWordOutlined />,
-    label: 'Docs',
-    children: [
-      {
-        key: '/docs/base',
-        icon: <FolderOutlined />,
-        label: 'Base',
-      },
-    ],
-  },
-  {
-    key: '/ppt',
-    icon: <FilePptOutlined />,
-    label: 'PPT',
-    children: [
-      {
-        key: '/ppt/base',
-        icon: <FolderOutlined />,
-        label: 'Base',
-      },
-    ],
+    label: '单实例',
   },
   {
     key: '/multi',
     icon: <AppstoreOutlined />,
-    label: 'Multi Instance',
-    children: [
-      {
-        key: '/multi/base',
-        icon: <FolderOutlined />,
-        label: 'Base',
-      },
-      {
-        key: '/multi/tabs',
-        icon: <FolderOutlined />,
-        label: 'Tabs',
-      },
-    ],
+    label: '多实例',
   },
 ]
 
@@ -91,12 +44,8 @@ export default function StudioLayout({ children }: StudioLayoutProps) {
 
     // 所有可能的路径映射
     const routeMap: Record<string, { selected: string; parent: string }> = {
-      '/excel/base': { selected: '/excel/base', parent: '/excel' },
-      '/docs/base': { selected: '/docs/base', parent: '/docs' },
-      '/ppt/base': { selected: '/ppt/base', parent: '/ppt' },
-      '/multi/base': { selected: '/multi/base', parent: '/multi' },
-      '/multi/tabs': { selected: '/multi/tabs', parent: '/multi' },
-      '/editor': { selected: '/editor', parent: '/editor' },
+      '/single': { selected: '/single', parent: '/single' },
+      '/multi': { selected: '/multi', parent: '/multi' },
     }
 
     // 精确匹配路径
