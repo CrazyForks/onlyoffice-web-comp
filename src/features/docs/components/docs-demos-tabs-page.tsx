@@ -57,7 +57,6 @@ export function DocsDemosTabsPage({ contents }: DocsDemosTabsPageProps) {
               title="单实例"
               defaultFileName="New_Document.docx"
               fileType={FILE_TYPE.DOCX}
-              accept=".docx,.doc,.docm,.odt,.rtf,.txt"
               newButtonLabel="新建文档"
             />
           </div>

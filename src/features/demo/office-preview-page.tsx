@@ -26,12 +26,13 @@ import {
   demoTitleClass,
   demoToolbarClass,
 } from "./demo-toolbar";
+import { OFFICE_UPLOAD_ACCEPT } from "./office-formats";
 
 type OfficePreviewPageProps = {
   title: string;
   defaultFileName: string;
   fileType: FileType;
-  accept: string;
+  accept?: string;
   newButtonLabel: string;
   /** public 目录下的默认文件路径，如 /test.xlsx */
   initialFileUrl?: string;
@@ -72,7 +73,7 @@ export function OfficePreviewPage({
   title,
   defaultFileName,
   fileType,
-  accept,
+  accept = OFFICE_UPLOAD_ACCEPT,
   newButtonLabel,
   initialFileUrl,
   embedded = false,
