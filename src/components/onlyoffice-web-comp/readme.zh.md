@@ -4,7 +4,7 @@
 
 基于 OnlyOffice 静态 SDK 的 **Web 端文档编辑组件库**，支持 Word / Excel / PowerPoint 的在线编辑、只读预览、导出与 x2t 格式转换。**无需自建 Document Server**，只需托管 SDK 静态资源。
 
-> 本文档为**入口页**。完整说明见 [`docs/`](./docs/00-概述.md)。
+> 本文档为**入口页**。完整说明见 [`docs/`](./docs/00-概述.md)。演示站点会直接渲染本目录下的 Markdown，对应路由 `/docs`。
 
 ## 文档导航
 
@@ -14,23 +14,32 @@
 | 01 | [快速开始](./docs/01-快速开始.md) | 初始化、容器挂载、创建编辑器 |
 | 02 | [核心 API](./docs/02-核心API.md) | `OnlyOfficeManager`、`EditorManager`、多实例 |
 | 03 | [事件系统](./docs/03-事件系统.md) | EventBus、事件类型与监听 |
-| 04 | [完整示例](./docs/04-完整示例.md) | React 集成示例 |
+| 04 | [完整示例](./docs/04-完整示例.md) | React 集成模式 |
 | 05 | [API 参考](./docs/05-API参考.md) | 常量、类型定义 |
 | 06 | [注意事项与支持格式](./docs/06-注意事项与支持格式.md) | 前置条件、文件格式、常见坑 |
 | 07 | [批注修订与 Word API](./docs/07-批注修订与-Word-API.md) | 批注、修订、SDK 回调 |
+| 08 | [单实例示例](./docs/08-单实例示例.md) | 单编辑器 Demo 与源码说明 |
+| 09 | [多实例示例](./docs/09-多实例示例.md) | Tab 多实例完整源码 |
 
-**推荐阅读路径**：首次接入 → [01](./docs/01-快速开始.md) → [02](./docs/02-核心API.md) → [04](./docs/04-完整示例.md)
+**推荐阅读路径**
+
+| 场景 | 路径 |
+|------|------|
+| 首次接入 | [01](./docs/01-快速开始.md) → [02](./docs/02-核心API.md) |
+| 在线体验 | [08](./docs/08-单实例示例.md) · [09](./docs/09-多实例示例.md) |
+| React 页面集成 | [04](./docs/04-完整示例.md) |
+| 多实例 / 导出 | [02](./docs/02-核心API.md) · [03](./docs/03-事件系统.md) |
 
 ## 目录结构
 
 ```
 onlyoffice-web-comp/
-├── const/       常量、静态资源路径、文件类型
+├── const/       常量、静态资源路径、文件类型、主题
 ├── store/       文档 / 语言等跨页面状态
 ├── util/        SDK 初始化、x2t 转换、下载
 ├── core/        EditorManager、OnlyOfficeManager、EventBus
 ├── feature/     批注、修订
-├── docs/        完整使用文档（从这里开始）
+├── docs/        完整使用文档（Markdown 源文件）
 └── internal/    mock server / x2t worker（不对外导出）
 ```
 
@@ -60,17 +69,21 @@ await OnlyOfficeManager.createWithFile({
 }, file);
 ```
 
-更多用法（事件、导出、多实例、只读切换）见 [docs/02-核心API.md](./docs/02-核心API.md)。
+更多用法（事件、导出、多实例、主题、语言、只读切换）见 [docs/02-核心API.md](./docs/02-核心API.md)。
 
 ## 本仓库中的演示
 
-组件库旁的演示页面位于 `src/components/onlyoffice-web-demo/`，可在以下路由体验：
+`docs/` 下的 Markdown 由演示站点渲染；示例页内嵌可交互编辑器。
 
-- `/docs/base` — Word 单实例
-- `/excel/base` — Excel 单实例（默认加载 `public/test.xlsx`）
-- `/ppt/base` — PPT 单实例
-- `/multi/base` — 多实例并排
-- `/multi/tabs` — 多实例 Tab 切换
+| 路由 | 说明 |
+|------|------|
+| `/docs` | 渲染本目录全部文档 |
+| `/docs/demos?tab=single` | 单实例在线示例（[08](./docs/08-单实例示例.md)） |
+| `/docs/demos?tab=multi` | 多实例 Tab 示例（[09](./docs/09-多实例示例.md)） |
+
+演示组件：`src/features/demo/`（`office-preview-page.tsx`、`tabs-multi-page.tsx`）
+
+本地启动：`pnpm dev` → http://localhost:3001
 
 ## 相关链接
 
