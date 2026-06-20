@@ -4,11 +4,15 @@
  * 底层仍由 EditorManager 驱动；本类负责 document store 与 x2t 转换编排。
  */
 import {
+  DEFAULT_OFFICE_THEME,
   ONLYOFFICE_ID,
   ONLYOFFICE_EVENT_KEYS,
   ONLYOFFICE_LANG_KEY,
+  OFFICE_THEME,
   type FileType,
+  type OfficeThemeId,
 } from "../const";
+import type { OfficeTheme } from "../internal/editor/types";
 import { getDocmentObj, setDocmentObj } from "../store/document";
 import {
   getCurrentLang,
@@ -36,6 +40,8 @@ export type OnlyOfficeManagerOptions = {
   readOnly?: boolean;
   user?: User;
   lang?: OnlyOfficeLang;
+  /** 编辑器界面主题，对应 customization.uiTheme */
+  theme?: OfficeTheme;
   /** 页面初始化会话，用于忽略路由切换后过期的 openDocument */
   loadSession?: number;
 };
@@ -54,6 +60,7 @@ export class OnlyOfficeManager {
 
   private editor: EditorManager;
   private readOnly: boolean;
+  private theme: OfficeTheme;
   private ready = false;
 
   private constructor(
@@ -64,6 +71,7 @@ export class OnlyOfficeManager {
     this.fileType = options.fileType;
     this.editor = editor;
     this.readOnly = options.readOnly ?? false;
+    this.theme = options.theme ?? DEFAULT_OFFICE_THEME;
     if (options.user) {
       editor.setUser(options.user);
     }
@@ -140,6 +148,7 @@ export class OnlyOfficeManager {
       readOnly,
       user: this.editor.getUser(),
       lang: getOnlyOfficeLang(),
+      theme: this.theme,
       containerId: this.containerId,
       editorManager: this.editor,
       loadSession: input.loadSession,
@@ -199,6 +208,29 @@ export class OnlyOfficeManager {
         : ONLYOFFICE_LANG_KEY.ZH;
     await this.setLanguage(nextLang);
     return nextLang;
+  }
+
+  getTheme() {
+    return this.editor.getTheme();
+  }
+
+  async setTheme(theme: OfficeTheme) {
+    this.theme = theme;
+    await this.editor.setTheme(theme);
+  }
+
+  /** 在浅色 / 深色主题之间切换 */
+  async toggleTheme() {
+    const darkThemes: OfficeThemeId[] = [
+      OFFICE_THEME.DARK,
+      OFFICE_THEME.NIGHT,
+      OFFICE_THEME.CONTRAST_DARK,
+    ];
+    const nextTheme = darkThemes.includes(this.getTheme() as OfficeThemeId)
+      ? OFFICE_THEME.WHITE
+      : OFFICE_THEME.DARK;
+    await this.setTheme(nextTheme);
+    return nextTheme;
   }
 
   getEditor() {

@@ -20,3 +20,4 @@ export * from "./feature";
 export type * from "./type/word-api";
 export type * from "./type/sdk-internal";
 export type { OfficeTheme, PluginMode, User } from "./internal/editor/types";
+export type { OfficeThemeId } from "./const";

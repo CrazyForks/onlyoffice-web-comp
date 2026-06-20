@@ -1258,6 +1258,37 @@ export class EditorManager {
     }
   }
 
+  getTheme(): OfficeTheme {
+    return this.uiTheme;
+  }
+
+  /** uiTheme 写在 iframe URL 参数里，运行时需 remount 才能生效。 */
+  async setTheme(theme: OfficeTheme) {
+    if (this.uiTheme === theme) {
+      return;
+    }
+
+    this.uiTheme = theme;
+
+    if (!this.editor) {
+      return;
+    }
+
+    onlyofficeEventbus.emit(ONLYOFFICE_EVENT_KEYS.LOADING_CHANGE, {
+      loading: true,
+    });
+
+    try {
+      await this.captureDocumentIfDirty();
+      this.destroyDocEditorInstance();
+      this.mountDocEditor();
+    } finally {
+      onlyofficeEventbus.emit(ONLYOFFICE_EVENT_KEYS.LOADING_CHANGE, {
+        loading: false,
+      });
+    }
+  }
+
   getInstanceId() {
     return this.instanceId;
   }
