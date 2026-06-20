@@ -12,7 +12,10 @@ import {
   OFFICE_THEME_OPTIONS,
   DEFAULT_OFFICE_THEME,
   OnlyOfficeManager,
+  convertBinToDocument,
+  downloadBlob,
   editorManagerFactory,
+  getOnlyOfficeMimeType,
   type FileType,
   type OfficeTheme,
 } from "@/components/onlyoffice-web-comp";
@@ -26,7 +29,7 @@ import {
   demoTitleClass,
   demoToolbarClass,
 } from "./demo-toolbar";
-import { OFFICE_UPLOAD_ACCEPT } from "./office-formats";
+import { getFileExtension, OFFICE_UPLOAD_ACCEPT } from "./office-formats";
 
 type OfficePreviewPageProps = {
   title: string;
@@ -90,6 +93,7 @@ export function OfficePreviewPage({
     DEFAULT_OFFICE_THEME,
   );
   const [editorReady, setEditorReady] = useState(false);
+  const [activeFileName, setActiveFileName] = useState(defaultFileName);
 
   useEffect(() => {
     let unsubscribeLoading: (() => void) | undefined;
@@ -188,6 +192,7 @@ export function OfficePreviewPage({
         throw new Error("Editor is not initialized");
       }
       await manager.openDocument({ fileName, file, readOnly: nextReadOnly });
+      setActiveFileName(fileName);
       setReadOnly(nextReadOnly);
     }, "操作失败");
 
@@ -213,7 +218,26 @@ export function OfficePreviewPage({
 
   const handleExport = () =>
     runAction(async () => {
-      await managerRef.current?.downloadExport();
+      const manager = managerRef.current;
+      if (!manager) {
+        throw new Error("Editor is not initialized");
+      }
+
+      const binData = await manager.exportDocument();
+      const exportExt = getFileExtension(activeFileName, fileType.toLowerCase());
+      const result = await convertBinToDocument(
+        binData.binData,
+        binData.fileName || activeFileName,
+        exportExt.toUpperCase() as FileType,
+        binData.media,
+      );
+
+      downloadBlob(
+        new Blob([result.data as BlobPart], {
+          type: getOnlyOfficeMimeType(exportExt),
+        }),
+        result.fileName || activeFileName,
+      );
     }, "导出失败");
 
   const handleToggleReadOnly = () =>

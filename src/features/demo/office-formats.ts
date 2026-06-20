@@ -14,3 +14,7 @@ export const OFFICE_UPLOAD_ACCEPT = [
   ".ppt",
   ".odp",
 ].join(",");
+
+export function getFileExtension(fileName: string, fallback = "docx") {
+  return fileName.split(".").pop()?.toLowerCase() || fallback;
+}
