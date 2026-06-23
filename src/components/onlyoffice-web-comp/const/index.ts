@@ -28,6 +28,34 @@ export const ONLYOFFICE_LANG_KEY = {
   EN: "en",
 } as const;
 
+/** OnlyOffice 界面主题（对应 editorConfig.customization.uiTheme） */
+export const OFFICE_THEME = {
+  LIGHT: "theme-light",
+  CLASSIC_LIGHT: "theme-classic-light",
+  WHITE: "theme-white",
+  DARK: "theme-dark",
+  NIGHT: "theme-night",
+  CONTRAST_DARK: "theme-contrast-dark",
+} as const;
+
+export type OfficeThemeId =
+  (typeof OFFICE_THEME)[keyof typeof OFFICE_THEME];
+
+export const DEFAULT_OFFICE_THEME: OfficeThemeId = OFFICE_THEME.WHITE;
+
+/** 示例 / UI 切换用的主题列表 */
+export const OFFICE_THEME_OPTIONS: ReadonlyArray<{
+  id: OfficeThemeId;
+  label: string;
+}> = [
+  { id: OFFICE_THEME.WHITE, label: "浅色" },
+  { id: OFFICE_THEME.CLASSIC_LIGHT, label: "经典浅色" },
+  { id: OFFICE_THEME.LIGHT, label: "Light" },
+  { id: OFFICE_THEME.DARK, label: "深色" },
+  { id: OFFICE_THEME.NIGHT, label: "夜间" },
+  { id: OFFICE_THEME.CONTRAST_DARK, label: "高对比深色" },
+];
+
 /** 只读 ↔ 编辑切换时，loading 最少展示时长（ms） */
 export const READONLY_SWITCH_MIN_DELAY_MS = 200;
 

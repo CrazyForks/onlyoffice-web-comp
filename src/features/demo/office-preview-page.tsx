@@ -1,25 +1,46 @@
 "use client";
 
+/**
+ * 单实例演示页：OnlyOfficeManager 门面 + 工具栏（上传/导出/主题/语言/只读）。
+ * 文档说明见 `onlyoffice-web-comp/docs/08-单实例示例.md`。
+ */
 import { memo, useEffect, useRef, useState } from "react";
 import {
   ONLYOFFICE_CONTAINER_CONFIG,
   ONLYOFFICE_ID,
   ONLYOFFICE_LANG_KEY,
+  OFFICE_THEME_OPTIONS,
+  DEFAULT_OFFICE_THEME,
   OnlyOfficeManager,
+  convertBinToDocument,
+  downloadBlob,
   editorManagerFactory,
+  getOnlyOfficeMimeType,
   type FileType,
+  type OfficeTheme,
 } from "@/components/onlyoffice-web-comp";
+
+import {
+  DemoButton,
+  DemoField,
+  DemoSelect,
+  demoHeaderClass,
+  demoHeaderInnerClass,
+  demoTitleClass,
+  demoToolbarClass,
+} from "./demo-toolbar";
+import { getFileExtension, OFFICE_UPLOAD_ACCEPT } from "./office-formats";
 
 type OfficePreviewPageProps = {
   title: string;
-  badge: string;
-  badgeClassName: string;
   defaultFileName: string;
   fileType: FileType;
-  accept: string;
+  accept?: string;
   newButtonLabel: string;
   /** public 目录下的默认文件路径，如 /test.xlsx */
   initialFileUrl?: string;
+  /** 嵌入文档页或父容器时使用 h-full */
+  embedded?: boolean;
 };
 
 function LoadingOverlay() {
@@ -53,13 +74,12 @@ async function fetchPublicFile(url: string, fileName: string) {
 
 export function OfficePreviewPage({
   title,
-  badge,
-  badgeClassName,
   defaultFileName,
   fileType,
-  accept,
+  accept = OFFICE_UPLOAD_ACCEPT,
   newButtonLabel,
   initialFileUrl,
+  embedded = false,
 }: OfficePreviewPageProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const managerRef = useRef<OnlyOfficeManager | null>(null);
@@ -69,7 +89,11 @@ export function OfficePreviewPage({
   const [currentLang, setCurrentLangState] = useState(
     ONLYOFFICE_LANG_KEY.ZH as string,
   );
+  const [currentTheme, setCurrentThemeState] = useState<OfficeTheme>(
+    DEFAULT_OFFICE_THEME,
+  );
   const [editorReady, setEditorReady] = useState(false);
+  const [activeFileName, setActiveFileName] = useState(defaultFileName);
 
   useEffect(() => {
     let unsubscribeLoading: (() => void) | undefined;
@@ -93,6 +117,7 @@ export function OfficePreviewPage({
             fileType,
             defaultFileName,
             readOnly,
+            theme: currentTheme,
             loadSession,
           },
           file,
@@ -103,6 +128,7 @@ export function OfficePreviewPage({
           fileType,
           defaultFileName,
           readOnly,
+          theme: currentTheme,
           loadSession,
           user: {
             id: "uid",
@@ -121,6 +147,7 @@ export function OfficePreviewPage({
       ownedManager = manager;
       managerRef.current = manager;
       setCurrentLangState(manager.getLanguage());
+      setCurrentThemeState(manager.getTheme());
       setEditorReady(true);
       unsubscribeLoading = manager.onLoadingChange(({ loading: next }) => {
         setLoading(next);
@@ -165,6 +192,7 @@ export function OfficePreviewPage({
         throw new Error("Editor is not initialized");
       }
       await manager.openDocument({ fileName, file, readOnly: nextReadOnly });
+      setActiveFileName(fileName);
       setReadOnly(nextReadOnly);
     }, "操作失败");
 
@@ -178,9 +206,38 @@ export function OfficePreviewPage({
       setCurrentLangState(nextLang);
     }, "切换语言失败");
 
+  const handleThemeChange = (theme: OfficeTheme) =>
+    runAction(async () => {
+      const manager = managerRef.current;
+      if (!manager) {
+        throw new Error("Editor is not initialized");
+      }
+      await manager.setTheme(theme);
+      setCurrentThemeState(manager.getTheme());
+    }, "切换主题失败");
+
   const handleExport = () =>
     runAction(async () => {
-      await managerRef.current?.downloadExport();
+      const manager = managerRef.current;
+      if (!manager) {
+        throw new Error("Editor is not initialized");
+      }
+
+      const binData = await manager.exportDocument();
+      const exportExt = getFileExtension(activeFileName, fileType.toLowerCase());
+      const result = await convertBinToDocument(
+        binData.binData,
+        binData.fileName || activeFileName,
+        exportExt.toUpperCase() as FileType,
+        binData.media,
+      );
+
+      downloadBlob(
+        new Blob([result.data as BlobPart], {
+          type: getOnlyOfficeMimeType(exportExt),
+        }),
+        result.fileName || activeFileName,
+      );
     }, "导出失败");
 
   const handleToggleReadOnly = () =>
@@ -194,65 +251,53 @@ export function OfficePreviewPage({
     }, "切换模式失败");
 
   return (
-    <div className="flex h-screen flex-col bg-white">
-      <div className="border-b border-gray-200 bg-gradient-to-r from-white to-gray-50 shadow-sm">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-4 px-5 py-4">
-          <div className="mr-auto flex items-center gap-3">
-            <div
-              className={`flex h-8 w-8 items-center justify-center rounded-lg font-bold text-white ${badgeClassName}`}
-            >
-              {badge}
-            </div>
-            <h1 className="text-lg font-semibold text-gray-900">{title}</h1>
+    <div
+      className={`flex flex-col bg-white ${
+        embedded ? "h-full min-h-0" : "h-screen"
+      }`}
+    >
+      <header className={demoHeaderClass}>
+        <div className={demoHeaderInnerClass}>
+          <div className="mr-auto flex min-w-0 items-baseline gap-2.5">
+            <h1 className={demoTitleClass}>{title}</h1>
           </div>
 
-          <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={handleLanguageSwitch}
-              className="rounded-md bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200"
-            >
-              {currentLang === ONLYOFFICE_LANG_KEY.ZH ? "点击切换 EN" : "点击切换中文"}
-            </button>
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="rounded-md bg-blue-500 px-4 py-2 text-white transition-colors hover:bg-blue-600"
-            >
-              上传文档
-            </button>
-            <button
-              type="button"
-              onClick={() => handleOpenDocument(defaultFileName)}
-              className="rounded-md border border-gray-300 bg-white px-4 py-2 transition-colors hover:bg-gray-50"
-            >
+          <div className={demoToolbarClass}>
+            <DemoButton onClick={handleLanguageSwitch}>
+              {currentLang === ONLYOFFICE_LANG_KEY.ZH ? "中文" : "English"}
+            </DemoButton>
+            <DemoField label="主题">
+              <DemoSelect
+                value={currentTheme}
+                onChange={(event) =>
+                  handleThemeChange(event.target.value as OfficeTheme)
+                }
+                disabled={!editorReady}
+              >
+                {OFFICE_THEME_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </DemoSelect>
+            </DemoField>
+            <DemoButton onClick={() => fileInputRef.current?.click()}>
+              上传
+            </DemoButton>
+            <DemoButton onClick={() => handleOpenDocument(defaultFileName)}>
               {newButtonLabel}
-            </button>
+            </DemoButton>
             {editorReady && (
               <>
-                <button
-                  type="button"
-                  onClick={handleExport}
-                  className="rounded-md border border-gray-300 bg-white px-4 py-2 transition-colors hover:bg-gray-50"
-                >
-                  导出
-                </button>
-                <button
-                  type="button"
-                  onClick={handleToggleReadOnly}
-                  className={`rounded-md px-4 py-2 transition-colors ${
-                    readOnly
-                      ? "bg-yellow-500 text-white hover:bg-yellow-600"
-                      : "border border-gray-300 bg-white hover:bg-gray-50"
-                  }`}
-                >
-                  {readOnly ? "只读模式" : "编辑模式"}
-                </button>
+                <DemoButton onClick={handleExport}>导出</DemoButton>
+                <DemoButton active={readOnly} onClick={handleToggleReadOnly}>
+                  {readOnly ? "只读" : "编辑"}
+                </DemoButton>
               </>
             )}
           </div>
         </div>
-      </div>
+      </header>
 
       {error && (
         <div className="mx-4 mt-4 rounded border-l-4 border-red-500 bg-red-50 p-4 text-red-700">
@@ -260,7 +305,7 @@ export function OfficePreviewPage({
         </div>
       )}
 
-      <div className="relative flex-1">
+      <div className="relative min-h-0 flex-1">
         <OnlyOfficeHost />
         {loading && <LoadingOverlay />}
       </div>

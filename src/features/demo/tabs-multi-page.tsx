@@ -1,14 +1,31 @@
 "use client";
 
+/**
+ * 多实例 Tab 演示：onlyOfficeManagerFactory 按 containerId 隔离，切换 Tab 时隐藏不销毁。
+ * 文档与完整源码说明见 `onlyoffice-web-comp/docs/09-多实例示例.md`。
+ */
 import { memo, useEffect, useRef, useState } from "react";
 import { nanoid } from "nanoid";
 import {
+  DemoButton,
+  DemoField,
+  DemoSelect,
+  demoHeaderClass,
+  demoHeaderInnerClass,
+  demoSubtitleClass,
+  demoTitleClass,
+  demoToolbarClass,
+} from "./demo-toolbar";
+import {
+  DEFAULT_OFFICE_THEME,
   FILE_TYPE,
   ONLYOFFICE_CONTAINER_CONFIG,
   ONLYOFFICE_EVENT_KEYS,
+  OFFICE_THEME_OPTIONS,
   onlyOfficeManagerFactory,
   onlyofficeEventbus,
   type FileType,
+  type OfficeTheme,
 } from "@/components/onlyoffice-web-comp";
 
 type DocKind = "word" | "excel" | "ppt";
@@ -16,11 +33,6 @@ type DocKind = "word" | "excel" | "ppt";
 type DocPreset = {
   label: string;
   badge: string;
-  badgeClassName: string;
-  tabAccent: string;
-  tabIdleBg: string;
-  tabIdleText: string;
-  tabAddBtn: string;
   fileType: FileType;
   defaultFileName: string;
   accept: string;
@@ -39,25 +51,13 @@ const DOC_PRESETS: Record<DocKind, DocPreset> = {
   word: {
     label: "Word",
     badge: "W",
-    badgeClassName: "bg-blue-100 text-blue-600",
-    tabAccent: "border-t-blue-300",
-    tabIdleBg: "hover:bg-white/60",
-    tabIdleText: "text-gray-500",
-    tabAddBtn:
-      "border border-blue-100 bg-blue-50/60 text-blue-600/80 hover:bg-blue-50 hover:border-blue-200",
     fileType: FILE_TYPE.DOCX,
     defaultFileName: "New_Document.docx",
-    accept: ".docx,.doc,.odt,.rtf,.txt",
+    accept: ".docx,.doc,.docm,.odt,.rtf,.txt",
   },
   excel: {
     label: "Excel",
     badge: "E",
-    badgeClassName: "bg-emerald-50 text-emerald-600",
-    tabAccent: "border-t-emerald-300",
-    tabIdleBg: "hover:bg-white/60",
-    tabIdleText: "text-gray-500",
-    tabAddBtn:
-      "border border-emerald-100 bg-emerald-50/60 text-emerald-600/80 hover:bg-emerald-50 hover:border-emerald-200",
     fileType: FILE_TYPE.XLSX,
     defaultFileName: "New_Spreadsheet.xlsx",
     accept: ".xlsx,.xls,.ods,.csv",
@@ -65,12 +65,6 @@ const DOC_PRESETS: Record<DocKind, DocPreset> = {
   ppt: {
     label: "PPT",
     badge: "P",
-    badgeClassName: "bg-orange-50 text-orange-600",
-    tabAccent: "border-t-orange-300",
-    tabIdleBg: "hover:bg-white/60",
-    tabIdleText: "text-gray-500",
-    tabAddBtn:
-      "border border-orange-100 bg-orange-50/60 text-orange-600/80 hover:bg-orange-50 hover:border-orange-200",
     fileType: FILE_TYPE.PPTX,
     defaultFileName: "New_Presentation.pptx",
     accept: ".pptx,.ppt,.odp",
@@ -118,11 +112,12 @@ function createInitialTabState() {
   return { tabs: [initialTab], activeId: initialTab.id };
 }
 
-export function TabsMultiPage() {
+export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
   const [tabs, setTabs] = useState<TabItem[]>([]);
   const [activeId, setActiveId] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [theme, setTheme] = useState<OfficeTheme>(DEFAULT_OFFICE_THEME);
   const initializedRef = useRef(new Set<string>());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -160,6 +155,7 @@ export function TabsMultiPage() {
         fileType: preset.fileType,
         defaultFileName: preset.defaultFileName,
         readOnly: tab.readOnly,
+        theme,
       },
       {
         fileName: tab.fileName,
@@ -262,6 +258,7 @@ export function TabsMultiPage() {
           fileType: preset.fileType,
           defaultFileName: preset.defaultFileName,
           readOnly: activeTab.readOnly,
+          theme,
         },
         {
           fileName: file.name,
@@ -286,6 +283,7 @@ export function TabsMultiPage() {
           fileType: preset.fileType,
           defaultFileName: preset.defaultFileName,
           readOnly: activeTab.readOnly,
+          theme,
         },
         {
           fileName: preset.defaultFileName,
@@ -321,6 +319,7 @@ export function TabsMultiPage() {
             fileType: preset.fileType,
             defaultFileName: preset.defaultFileName,
             readOnly: nextReadOnly,
+            theme,
           },
           {
             fileName: activeTab.fileName,
@@ -333,67 +332,68 @@ export function TabsMultiPage() {
       updateTab(activeTab.id, { readOnly: nextReadOnly });
     }, "切换模式失败");
 
+  const applyTheme = (nextTheme: OfficeTheme) =>
+    runAction(async () => {
+      setTheme(nextTheme);
+
+      await Promise.all(
+        tabs.map(async (tab) => {
+          if (!initializedRef.current.has(tab.id)) return;
+
+          const manager = onlyOfficeManagerFactory.get(tab.containerId);
+          if (manager?.isReady()) {
+            await manager.setTheme(nextTheme);
+          }
+        }),
+      );
+    }, "切换主题失败");
+
   return (
-    <div className="flex h-screen flex-col bg-gray-50">
-      <div className="border-b border-gray-200 bg-gradient-to-r from-white to-gray-50 shadow-sm">
-        <div className="flex flex-wrap items-center gap-4 px-5 py-4">
-          <div className="mr-auto flex min-w-0 items-center gap-3">
-            <div
-              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-semibold ${
-                activePreset?.badgeClassName ?? "bg-blue-100 text-blue-600"
-              }`}
-            >
-              {activePreset?.badge ?? "T"}
-            </div>
-            <div className="min-w-0">
-              <h1 className="text-lg font-semibold text-gray-900">
-                多实例 Tab 演示
-              </h1>
-              <p className="truncate text-xs text-gray-500">
-                {activeTab
-                  ? `${activePreset?.label} · ${activeTab.fileName}`
-                  : "切换标签页，实例状态会保留"}
-              </p>
-            </div>
+    <div
+      className={`flex flex-col bg-neutral-100 ${
+        embedded ? "h-full min-h-0" : "h-screen"
+      }`}
+    >
+      <header className={demoHeaderClass}>
+        <div className={demoHeaderInnerClass}>
+          <div className="mr-auto min-w-0">
+            <h1 className={demoTitleClass}>{embedded ? "示例" : "多实例"}</h1>
+            <p className={demoSubtitleClass}>
+              {activeTab
+                ? `${activePreset?.label} · ${activeTab.fileName}`
+                : "切换标签页，实例状态会保留"}
+            </p>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="rounded-md bg-blue-500 px-4 py-2 text-sm text-white transition-colors hover:bg-blue-600"
-            >
-              上传文档
-            </button>
-            <button
-              type="button"
-              onClick={newDocument}
-              className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm transition-colors hover:bg-gray-50"
-            >
+          <div className={demoToolbarClass}>
+            <DemoField label="主题">
+              <DemoSelect
+                value={theme}
+                onChange={(event) =>
+                  applyTheme(event.target.value as OfficeTheme)
+                }
+              >
+                {OFFICE_THEME_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </DemoSelect>
+            </DemoField>
+            <DemoButton onClick={() => fileInputRef.current?.click()}>
+              上传
+            </DemoButton>
+            <DemoButton onClick={newDocument}>
               新建{activePreset?.label ?? "文档"}
-            </button>
-            <button
-              type="button"
-              onClick={exportDocument}
-              className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm transition-colors hover:bg-gray-50"
-            >
-              导出
-            </button>
-            <button
-              type="button"
-              onClick={toggleReadOnly}
-              className={`rounded-md px-4 py-2 text-sm transition-colors ${
-                activeTab?.readOnly
-                  ? "bg-yellow-500 text-white hover:bg-yellow-600"
-                  : "border border-gray-300 bg-white hover:bg-gray-50"
-              }`}
-            >
-              {activeTab?.readOnly ? "只读模式" : "编辑模式"}
-            </button>
+            </DemoButton>
+            <DemoButton onClick={exportDocument}>导出</DemoButton>
+            <DemoButton active={!!activeTab?.readOnly} onClick={toggleReadOnly}>
+              {activeTab?.readOnly ? "只读" : "编辑"}
+            </DemoButton>
           </div>
         </div>
 
-        <div className="border-t border-gray-100 bg-gray-50/80 px-3 py-1">
+        <div className="border-t border-neutral-200/80 bg-[#f5f4f3] px-2 py-1">
           <div className="flex items-end gap-0.5 overflow-x-auto">
             {tabs.map((tab) => {
               const preset = getPreset(tab.docKind);
@@ -401,23 +401,21 @@ export function TabsMultiPage() {
               return (
                 <div
                   key={tab.id}
-                  className={`group relative flex max-w-[200px] min-w-[96px] shrink-0 items-stretch rounded-t-md border border-b-0 transition-colors ${
+                  className={`group relative flex max-w-[200px] min-w-[88px] shrink-0 items-stretch border border-b-0 ${
                     isActive
-                      ? `z-10 -mb-px border-gray-200 bg-white ${preset.tabAccent} border-t-2`
-                      : `border-transparent ${preset.tabIdleBg}`
+                      ? "z-10 -mb-px border-neutral-300 bg-white"
+                      : "border-transparent hover:bg-white/50"
                   }`}
                 >
                   <button
                     type="button"
                     onClick={() => setActiveId(tab.id)}
-                    className={`flex min-w-0 flex-1 items-center gap-1.5 px-2.5 py-1.5 text-xs transition-colors ${
-                      isActive ? "text-gray-800" : preset.tabIdleText
+                    className={`flex min-w-0 flex-1 items-center gap-1.5 px-2.5 py-1.5 text-[12px] ${
+                      isActive ? "text-neutral-900" : "text-neutral-500"
                     }`}
                     title={tab.fileName}
                   >
-                    <span
-                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded text-[9px] font-semibold ${preset.badgeClassName}`}
-                    >
+                    <span className="shrink-0 text-[11px] text-neutral-400">
                       {preset.badge}
                     </span>
                     <span className="truncate">{tab.label}</span>
@@ -440,7 +438,7 @@ export function TabsMultiPage() {
               );
             })}
 
-            <div className="mb-px flex shrink-0 items-center gap-1.5 pl-2">
+            <div className="mb-px flex shrink-0 items-center gap-1 pl-1.5">
               {(Object.keys(DOC_PRESETS) as DocKind[]).map((kind) => {
                 const preset = getPreset(kind);
                 return (
@@ -448,7 +446,7 @@ export function TabsMultiPage() {
                     key={kind}
                     type="button"
                     onClick={() => addTab(kind)}
-                    className={`rounded px-2 py-1 text-xs transition-colors ${preset.tabAddBtn}`}
+                    className="inline-flex h-7 items-center border border-dashed border-neutral-300 bg-transparent px-2 text-[12px] text-neutral-600 hover:border-neutral-400 hover:bg-white"
                     title={`新建 ${preset.label} 标签页`}
                   >
                     + {preset.label}
@@ -458,7 +456,7 @@ export function TabsMultiPage() {
             </div>
           </div>
         </div>
-      </div>
+      </header>
 
       {error && (
         <div className="mx-4 mt-4 rounded border-l-4 border-red-500 bg-red-50 p-3 text-sm text-red-700">
@@ -466,7 +464,7 @@ export function TabsMultiPage() {
         </div>
       )}
 
-      <div className="relative flex-1 bg-white">
+      <div className="relative min-h-0 flex-1 bg-white">
         {tabs.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-gray-400">
             加载中...

@@ -4,7 +4,7 @@
 
 ## `OnlyOfficeManager`（推荐）
 
-面向业务页面的门面，收敛初始化、开文档、导出、只读、语言等调用。
+面向业务页面的门面，收敛初始化、开文档、导出、只读、语言、主题等调用。
 
 ### `OnlyOfficeManager.create(options)`
 
@@ -15,6 +15,7 @@ import {
   OnlyOfficeManager,
   ONLYOFFICE_ID,
   FILE_TYPE,
+  DEFAULT_OFFICE_THEME,
 } from "@/components/onlyoffice-web-comp";
 
 const manager = await OnlyOfficeManager.create({
@@ -23,6 +24,7 @@ const manager = await OnlyOfficeManager.create({
   defaultFileName: "New_Document.docx",
   readOnly: false,
   lang: "zh",                   // 可选，默认 zh
+  theme: DEFAULT_OFFICE_THEME,  // 可选，默认 theme-white
 });
 ```
 
@@ -51,12 +53,48 @@ const manager = await OnlyOfficeManager.createWithFile(
 | `isReady()` | 是否已打开文档 |
 | `getReadOnly()` / `setReadOnly()` / `toggleReadOnly()` | 只读切换（同步，底层 `asc_setRestriction`） |
 | `getLanguage()` / `setLanguage()` / `toggleLanguage()` | 语言切换 |
+| `getTheme()` / `setTheme(theme)` / `toggleTheme()` | 界面主题切换（见下文） |
 | `exportDocument()` | 导出 bin 数据 |
 | `exportAsBlob()` | 导出为 Blob |
 | `downloadExport()` | 导出并触发浏览器下载 |
 | `onLoadingChange(handler)` | 监听 loading，返回取消函数 |
 | `getEditor()` | 获取底层 `EditorManager` |
 | `destroy()` | 销毁实例 |
+
+### 主题切换
+
+主题对应 OnlyOffice `customization.uiTheme`。切换时会短暂 remount iframe（先保存未提交编辑），可通过 `onLoadingChange` 监听 loading。
+
+```typescript
+import {
+  OnlyOfficeManager,
+  OFFICE_THEME,
+  OFFICE_THEME_OPTIONS,
+  DEFAULT_OFFICE_THEME,
+  type OfficeTheme,
+} from "@/components/onlyoffice-web-comp";
+
+// 创建时指定初始主题
+const manager = await OnlyOfficeManager.create({
+  fileType: FILE_TYPE.DOCX,
+  defaultFileName: "New_Document.docx",
+  theme: OFFICE_THEME.DARK,
+});
+
+// 运行时切换
+await manager.setTheme(OFFICE_THEME.NIGHT);
+const current = manager.getTheme();
+
+// 在浅色 / 深色之间快捷切换
+await manager.toggleTheme();
+
+// UI 下拉框可遍历 OFFICE_THEME_OPTIONS
+OFFICE_THEME_OPTIONS.map(({ id, label }) => (
+  <option key={id} value={id}>{label}</option>
+));
+```
+
+可用主题常量见 [05 - API 参考 · OFFICE_THEME](./05-API参考.md#office_theme)。
 
 ### `OpenDocumentInput`
 
@@ -186,6 +224,7 @@ editorManagerFactory.destroyAll();
 | `getInstanceId()` | 获取实例唯一 ID |
 | `getContainerId()` | 获取容器 ID |
 | `getFileName()` | 获取当前文件名 |
+| `getTheme()` / `setTheme(theme)` | 获取 / 切换界面主题 |
 | `updateMedia(key, url)` | 更新媒体文件映射 |
 | `getMedia()` | 获取媒体文件映射 |
 | `destroy()` | 销毁编辑器实例 |
