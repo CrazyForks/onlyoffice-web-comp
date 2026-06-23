@@ -92,13 +92,75 @@ type StaticResource = {
     root: string;
     script: string;
     wasm: string;
+    /** PDF 导出字体目录（见 X2T_PDF_FONT_MANIFEST） */
+    pdfFonts: {
+      root: string;
+      default: string;
+    };
   };
 };
+
+/** @deprecated 使用 X2T_PDF_FONT_MANIFEST[0].file */
+export const X2T_PDF_DEFAULT_FONT_FILE = "Carlito-Regular.ttf";
+
+/**
+ * x2t PDF 字体：每款 TTF 独立二进制 + 别名。
+ * - Carlito 四款 → Calibri（表格 styles 粗斜体）
+ * - Arial 四款 → Arial（西文/数字，勿映射到 DroidSansFallback 否则会乱码）
+ * - DroidSansFallback → 仅中文常用名（宋体/微软雅黑等）
+ */
+export const X2T_PDF_FONT_MANIFEST = [
+  {
+    file: "Carlito-Regular.ttf",
+    aliases: ["Carlito.ttf", "Calibri.ttf"],
+  },
+  {
+    file: "Carlito-Bold.ttf",
+    aliases: ["Carlito_Bold.ttf", "Calibri_Bold.ttf"],
+  },
+  {
+    file: "Carlito-Italic.ttf",
+    aliases: ["Carlito_Italic.ttf", "Calibri_Italic.ttf"],
+  },
+  {
+    file: "Carlito-BoldItalic.ttf",
+    aliases: ["Carlito_Bold_Italic.ttf", "Calibri_Bold_Italic.ttf"],
+  },
+  {
+    file: "Arial-Regular.ttf",
+    aliases: ["Arial.ttf"],
+  },
+  {
+    file: "Arial-Bold.ttf",
+    aliases: ["Arial_Bold.ttf"],
+  },
+  {
+    file: "Arial-Italic.ttf",
+    aliases: ["Arial_Italic.ttf"],
+  },
+  {
+    file: "Arial-BoldItalic.ttf",
+    aliases: ["Arial_Bold_Italic.ttf"],
+  },
+  {
+    file: "DroidSansFallback.ttf",
+    aliases: [
+      "Droid Sans Fallback.ttf",
+      "SimSun.ttf",
+      "NSimSun.ttf",
+      "宋体.ttf",
+      "Microsoft YaHei.ttf",
+      "微软雅黑.ttf",
+      "PingFang SC.ttf",
+    ],
+  },
+] as const;
 
 function createStaticResource(): StaticResource {
   const onlyofficeSdkRoot = "/packages/onlyoffice/9.3.0";
   /** x2t 与 SDK 同版本目录；磁盘上为 Brotli 预压缩，由 x2t.worker 内 fetch-brotli 自动解压 */
   const x2tRoot = `${onlyofficeSdkRoot}/x2t`;
+  const x2tPdfFontsRoot = `${onlyofficeSdkRoot}/x2t-fonts`;
   const apiJs = "/web-apps/apps/api/documents/api.js";
   const preloadHtml = "/web-apps/apps/api/documents/preload.html";
 
@@ -118,6 +180,10 @@ function createStaticResource(): StaticResource {
       root: x2tRoot,
       script: `${x2tRoot}/x2t.js`,
       wasm: `${x2tRoot}/x2t.wasm`,
+      pdfFonts: {
+        root: x2tPdfFontsRoot,
+        default: `${x2tPdfFontsRoot}/${X2T_PDF_DEFAULT_FONT_FILE}`,
+      },
     },
   };
 }

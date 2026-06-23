@@ -208,6 +208,8 @@ export interface X2tConvertParams {
   csvDelimiter?: number;
   csvDelimiterChar?: string;
   media?: { [key: string]: Uint8Array };
+  /** Web SDK PDF 另存为 POST 的渲染器 Memory 流，x2t 需写入 /working/pdf.bin。 */
+  pdfBin?: Uint8Array;
   fonts?: { [key: string]: Uint8Array };
   fontAliases?: { [key: string]: string };
   fontExportAliases?: { [key: string]: string };

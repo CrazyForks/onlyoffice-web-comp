@@ -40,6 +40,9 @@ export function getOnlyOfficeMimeType(fileExtension?: string): string {
   if (["pptx", "ppt"].includes(extension)) {
     return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
   }
+  if (extension === "pdf") {
+    return "application/pdf";
+  }
   if (extension === "txt") return "text/plain";
   return "application/octet-stream";
 }

@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 
 import { AvsFileType, X2tConvertParams, X2tConvertResult } from "./types";
+import { loadX2tPdfFonts } from "./x2t-pdf-fonts";
 import {
   fetchMaybeBrotliAsset,
   fetchMaybeBrotliScript,
@@ -469,6 +470,21 @@ function writeFonts(fonts?: { [key: string]: Uint8Array }) {
   }
 }
 
+function writePdfBin(pdfBin?: Uint8Array) {
+  const pdfPath = "/working/pdf.bin";
+  try {
+    if (x2t.FS.analyzePath(pdfPath).exists) {
+      x2t.FS.unlink(pdfPath);
+    }
+  } catch (err) {
+    console.error(err);
+  }
+
+  if (pdfBin?.byteLength) {
+    x2t.FS.writeFile(pdfPath, pdfBin);
+  }
+}
+
 /**
  * Read media files from the working directory
  */
@@ -499,6 +515,7 @@ function writeInputs({
   formatTo,
   data,
   media,
+  pdfBin,
   csvEncoding,
   csvDelimiter,
   csvDelimiterChar,
@@ -506,17 +523,21 @@ function writeInputs({
   const isCsvSource =
     formatFrom === AvsFileType.AVS_FILE_SPREADSHEET_CSV ||
     fileFrom.toLowerCase().endsWith(".csv");
+  const usePdfBinPath = Boolean(pdfBin?.byteLength);
 
   const params: Record<string, string | number | boolean> = {
     m_sFileFrom: fileFrom,
     m_sThemeDir: "/working/themes",
     m_sFileTo: fileTo,
-    m_nFormatFrom: formatFrom ?? 0,
-    m_nFormatTo: formatTo ?? 0,
     m_bIsPDFA: formatTo === AvsFileType.AVS_FILE_CROSSPLATFORM_PDFA,
-    m_bIsNoBase64: true,
+    m_bIsNoBase64: usePdfBinPath ? false : true,
     m_sFontDir: "/working/fonts/",
   };
+
+  if (!usePdfBinPath) {
+    params.m_nFormatFrom = formatFrom ?? 0;
+    params.m_nFormatTo = formatTo ?? 0;
+  }
 
   if (isCsvSource) {
     params.m_nCsvTxtEncoding = csvEncoding ?? 46;
@@ -565,6 +586,7 @@ async function convert({
   formatFrom,
   formatTo,
   media,
+  pdfBin,
   fonts,
   fontAliases,
   fontExportAliases,
@@ -579,8 +601,23 @@ async function convert({
   const fromPath = "/working/" + fileFrom;
   const toPath = "/working/" + fileTo;
   const files = [fromPath, toPath, xmlPath];
+  if (pdfBin?.byteLength) {
+    files.push("/working/pdf.bin");
+  }
 
-  writeFonts(fonts);
+  const needsPdfFonts =
+    Boolean(pdfBin?.byteLength) ||
+    formatTo === AvsFileType.AVS_FILE_CROSSPLATFORM_PDF ||
+    formatTo === AvsFileType.AVS_FILE_CROSSPLATFORM_PDFA;
+
+  let allFonts = fonts;
+  if (needsPdfFonts) {
+    const pdfFonts = await loadX2tPdfFonts(self.location.origin);
+    allFonts = { ...pdfFonts, ...fonts };
+  }
+
+  writeFonts(allFonts);
+  writePdfBin(pdfBin);
 
   writeInputs({
     fileFrom: fromPath,
@@ -589,6 +626,7 @@ async function convert({
     formatTo,
     data: preparedData,
     media,
+    pdfBin,
     csvEncoding,
     csvDelimiter,
     csvDelimiterChar,
@@ -626,9 +664,20 @@ async function convert({
     console.error("ccall", e);
   }
 
+  const PDF_MAX_OUTPUT_BYTES = 50 * 1024 * 1024;
+
   // Read output file
   let output: Uint8Array | null = null;
   try {
+    const outputSize = x2t.FS.stat(toPath).size;
+    if (outputSize > PDF_MAX_OUTPUT_BYTES) {
+      try {
+        x2t.FS.unlink(toPath);
+      } catch {}
+      throw new Error(
+        `x2t output too large (${outputSize} bytes); conversion likely corrupt`,
+      );
+    }
     output = x2t.FS.readFile(toPath);
     if (output && fileTo === "Editor.bin" && fontAliases) {
       output = restoreEditorBinFontNames(output, fontAliases);

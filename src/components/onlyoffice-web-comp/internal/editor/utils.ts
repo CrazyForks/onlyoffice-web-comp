@@ -22,19 +22,64 @@ const x2tSourceFormatByExt: Record<string, AvsFileType> = {
   odt: AvsFileType.AVS_FILE_DOCUMENT_ODT,
   rtf: AvsFileType.AVS_FILE_DOCUMENT_RTF,
   txt: AvsFileType.AVS_FILE_DOCUMENT_TXT,
+  html: AvsFileType.AVS_FILE_DOCUMENT_HTML,
+  mht: AvsFileType.AVS_FILE_DOCUMENT_MHT,
+  epub: AvsFileType.AVS_FILE_DOCUMENT_EPUB,
+  fb2: AvsFileType.AVS_FILE_DOCUMENT_FB2,
+  mobi: AvsFileType.AVS_FILE_DOCUMENT_MOBI,
   docm: AvsFileType.AVS_FILE_DOCUMENT_DOCM,
   dotx: AvsFileType.AVS_FILE_DOCUMENT_DOTX,
   dotm: AvsFileType.AVS_FILE_DOCUMENT_DOTM,
+  fodt: AvsFileType.AVS_FILE_DOCUMENT_ODT_FLAT,
+  ott: AvsFileType.AVS_FILE_DOCUMENT_OTT,
+  oform: AvsFileType.AVS_FILE_DOCUMENT_OFORM,
+  docxf: AvsFileType.AVS_FILE_DOCUMENT_DOCXF,
   xlsx: AvsFileType.AVS_FILE_SPREADSHEET_XLSX,
   xls: AvsFileType.AVS_FILE_SPREADSHEET_XLS,
   ods: AvsFileType.AVS_FILE_SPREADSHEET_ODS,
   csv: AvsFileType.AVS_FILE_SPREADSHEET_CSV,
   xlsm: AvsFileType.AVS_FILE_SPREADSHEET_XLSM,
+  xltx: AvsFileType.AVS_FILE_SPREADSHEET_XLTX,
+  xltm: AvsFileType.AVS_FILE_SPREADSHEET_XLTM,
+  xlsb: AvsFileType.AVS_FILE_SPREADSHEET_XLSB,
+  fods: AvsFileType.AVS_FILE_SPREADSHEET_ODS_FLAT,
+  ots: AvsFileType.AVS_FILE_SPREADSHEET_OTS,
   pptx: AvsFileType.AVS_FILE_PRESENTATION_PPTX,
   ppt: AvsFileType.AVS_FILE_PRESENTATION_PPT,
   odp: AvsFileType.AVS_FILE_PRESENTATION_ODP,
+  ppsx: AvsFileType.AVS_FILE_PRESENTATION_PPSX,
+  pptm: AvsFileType.AVS_FILE_PRESENTATION_PPTM,
+  ppsm: AvsFileType.AVS_FILE_PRESENTATION_PPSM,
+  potx: AvsFileType.AVS_FILE_PRESENTATION_POTX,
+  potm: AvsFileType.AVS_FILE_PRESENTATION_POTM,
+  fodp: AvsFileType.AVS_FILE_PRESENTATION_ODP_FLAT,
+  otp: AvsFileType.AVS_FILE_PRESENTATION_OTP,
   pdf: AvsFileType.AVS_FILE_CROSSPLATFORM_PDF,
+  pdfa: AvsFileType.AVS_FILE_CROSSPLATFORM_PDFA,
+  djvu: AvsFileType.AVS_FILE_CROSSPLATFORM_DJVU,
+  xps: AvsFileType.AVS_FILE_CROSSPLATFORM_XPS,
+  vsdx: AvsFileType.AVS_FILE_DRAW_VSDX,
+  vssx: AvsFileType.AVS_FILE_DRAW_VSSX,
+  vstx: AvsFileType.AVS_FILE_DRAW_VSTX,
+  vsdm: AvsFileType.AVS_FILE_DRAW_VSDM,
+  vssm: AvsFileType.AVS_FILE_DRAW_VSSM,
+  vstm: AvsFileType.AVS_FILE_DRAW_VSTM,
+  zip: AvsFileType.AVS_FILE_OTHER + 0x0009,
+  json: AvsFileType.AVS_FILE_OTHER_JSON,
 };
+
+function getDefaultX2tSourceFormat(fileType: string) {
+  switch (getDocumentType(fileType)) {
+    case DocumentType.Cell:
+      return AvsFileType.AVS_FILE_SPREADSHEET_XLSX;
+    case DocumentType.Slide:
+      return AvsFileType.AVS_FILE_PRESENTATION_PPTX;
+    case DocumentType.Draw:
+      return AvsFileType.AVS_FILE_DRAW_VSDX;
+    default:
+      return AvsFileType.AVS_FILE_DOCUMENT_DOCX;
+  }
+}
 
 function getX2tBinFormat(fileType: string) {
   switch (getDocumentType(fileType)) {
@@ -52,7 +97,7 @@ function getX2tBinFormat(fileType: string) {
 export function getX2tConvertFormats(fileType: string) {
   const ext = getFileExt(fileType);
   const formatFrom =
-    x2tSourceFormatByExt[ext] ?? AvsFileType.AVS_FILE_DOCUMENT_DOCX;
+    x2tSourceFormatByExt[ext] ?? getDefaultX2tSourceFormat(fileType);
 
   return {
     formatFrom,
@@ -333,13 +378,109 @@ export function getX2tCsvConvertOptions(buffer: ArrayBuffer) {
   };
 }
 
-export function getX2tExportFormats(fileType: string) {
+/** @param sourceFileType 源文档类型（如 xlsx）；导出 pdf 等目标格式时必须传入，否则会误用 CANVAS_WORD。 */
+export function getX2tExportFormats(
+  fileType: string,
+  sourceFileType?: string,
+) {
   const ext = getFileExt(fileType);
+  const source = sourceFileType ?? fileType;
   const formatTo =
-    x2tSourceFormatByExt[ext] ?? AvsFileType.AVS_FILE_DOCUMENT_DOCX;
+    x2tSourceFormatByExt[ext] ?? getDefaultX2tSourceFormat(source);
 
   return {
-    formatFrom: getX2tBinFormat(fileType),
+    formatFrom: getX2tBinFormat(source),
     formatTo,
   };
+}
+
+const outputFormatToExt: Record<number, string> = Object.fromEntries(
+  Object.entries(x2tSourceFormatByExt).map(([ext, format]) => [format, ext]),
+);
+
+Object.assign(outputFormatToExt, {
+  [AvsFileType.AVS_FILE_DOCUMENT_HTML]: "html",
+  [AvsFileType.AVS_FILE_DOCUMENT_MHT]: "mht",
+  [AvsFileType.AVS_FILE_DOCUMENT_EPUB]: "epub",
+  [AvsFileType.AVS_FILE_DOCUMENT_FB2]: "fb2",
+  [AvsFileType.AVS_FILE_DOCUMENT_MOBI]: "mobi",
+  [AvsFileType.AVS_FILE_DOCUMENT_DOTX]: "dotx",
+  [AvsFileType.AVS_FILE_DOCUMENT_DOTM]: "dotm",
+  [AvsFileType.AVS_FILE_DOCUMENT_ODT_FLAT]: "fodt",
+  [AvsFileType.AVS_FILE_DOCUMENT_OTT]: "ott",
+  [AvsFileType.AVS_FILE_DOCUMENT_OFORM]: "oform",
+  [AvsFileType.AVS_FILE_DOCUMENT_DOCXF]: "docxf",
+  [AvsFileType.AVS_FILE_PRESENTATION_PPSX]: "ppsx",
+  [AvsFileType.AVS_FILE_PRESENTATION_PPTM]: "pptm",
+  [AvsFileType.AVS_FILE_PRESENTATION_PPSM]: "ppsm",
+  [AvsFileType.AVS_FILE_PRESENTATION_POTX]: "potx",
+  [AvsFileType.AVS_FILE_PRESENTATION_POTM]: "potm",
+  [AvsFileType.AVS_FILE_PRESENTATION_ODP_FLAT]: "fodp",
+  [AvsFileType.AVS_FILE_PRESENTATION_OTP]: "otp",
+  [AvsFileType.AVS_FILE_SPREADSHEET_XLSM]: "xlsm",
+  [AvsFileType.AVS_FILE_SPREADSHEET_XLTX]: "xltx",
+  [AvsFileType.AVS_FILE_SPREADSHEET_XLTM]: "xltm",
+  [AvsFileType.AVS_FILE_SPREADSHEET_XLSB]: "xlsb",
+  [AvsFileType.AVS_FILE_SPREADSHEET_ODS_FLAT]: "fods",
+  [AvsFileType.AVS_FILE_SPREADSHEET_OTS]: "ots",
+  [AvsFileType.AVS_FILE_CROSSPLATFORM_PDF]: "pdf",
+  [AvsFileType.AVS_FILE_CROSSPLATFORM_PDFA]: "pdf",
+  [AvsFileType.AVS_FILE_CROSSPLATFORM_DJVU]: "djvu",
+  [AvsFileType.AVS_FILE_CROSSPLATFORM_XPS]: "xps",
+  [AvsFileType.AVS_FILE_OTHER + 0x0009]: "zip",
+  [AvsFileType.AVS_FILE_OTHER_JSON]: "json",
+  [AvsFileType.AVS_FILE_CANVAS_WORD]: "bin",
+  [AvsFileType.AVS_FILE_CANVAS_SPREADSHEET]: "bin",
+  [AvsFileType.AVS_FILE_CANVAS_PRESENTATION]: "bin",
+  [AvsFileType.AVS_FILE_DRAW_VSDX]: "vsdx",
+  [AvsFileType.AVS_FILE_DRAW_VSSX]: "vssx",
+  [AvsFileType.AVS_FILE_DRAW_VSTX]: "vstx",
+  [AvsFileType.AVS_FILE_DRAW_VSDM]: "vsdm",
+  [AvsFileType.AVS_FILE_DRAW_VSSM]: "vssm",
+  [AvsFileType.AVS_FILE_DRAW_VSTM]: "vstm",
+  [AvsFileType.AVS_FILE_TEAMLAB_DOCY]: "bin",
+  [AvsFileType.AVS_FILE_TEAMLAB_XLSY]: "bin",
+  [AvsFileType.AVS_FILE_TEAMLAB_PPTY]: "bin",
+});
+
+const canvasBinOutputFormats = new Set<number>([
+  AvsFileType.AVS_FILE_CANVAS_WORD,
+  AvsFileType.AVS_FILE_CANVAS_SPREADSHEET,
+  AvsFileType.AVS_FILE_CANVAS_PRESENTATION,
+  AvsFileType.AVS_FILE_TEAMLAB_DOCY,
+  AvsFileType.AVS_FILE_TEAMLAB_XLSY,
+  AvsFileType.AVS_FILE_TEAMLAB_PPTY,
+]);
+
+/** EditorManager export() / downloadAs("bin") 使用的 canvas bin 格式，不是 UI 另存为。 */
+export function isCanvasBinOutputFormat(outputFormat?: number) {
+  return outputFormat != null && canvasBinOutputFormats.has(outputFormat);
+}
+
+/** OnlyOffice downloadAs cmd.outputformat（AvsFileType 数值）→ 文件扩展名。 */
+export function extensionFromOutputFormat(outputFormat?: number): string {
+  if (outputFormat == null) {
+    return "";
+  }
+  return outputFormatToExt[outputFormat] || "";
+}
+
+/** 保证文档标题带正确后缀，供 OnlyOffice 内置「另存为」推导下载文件名。 */
+export function ensureTitleWithExtension(title: string, fileType: string): string {
+  const ext = fileType.toLowerCase();
+  if (!ext) {
+    return title;
+  }
+
+  const currentExt = getFileExt(title);
+  if (currentExt === ext) {
+    return title;
+  }
+
+  const dotIndex = title.lastIndexOf(".");
+  const base =
+    dotIndex > 0 && dotIndex < title.length - 1
+      ? title.slice(0, dotIndex)
+      : title;
+  return `${base}.${ext}`;
 }
