@@ -1,16 +1,27 @@
 import { converter } from "./x2t";
 import { MockSocket } from "./socket";
-import { User, Participant, AscSaveTypes, ServerOptions } from "./types";
+import {
+  User,
+  Participant,
+  AscSaveTypes,
+  ServerOptions,
+  DocumentType,
+} from "./types";
 import { emptyDocx, emptyPdf, emptyPptx, emptyXlsx } from "./empty";
 import { convertCsvBufferToXlsxBuffer } from "./csv-to-xlsx";
 import {
   getDocumentType,
   getFileExt,
   getX2tConvertFormats,
+  getX2tExportFormats,
   getX2tCsvConvertOptions,
   sanitizeCsvBufferForX2t,
   isMultilineCsv,
+  extensionFromOutputFormat,
+  ensureTitleWithExtension,
+  isCanvasBinOutputFormat,
 } from "./utils";
+import { getOnlyOfficeMimeType } from "../../util/document-file";
 import { allPlugins, featuredPlugins, getPluginsData } from "./plugins";
 
 /**
@@ -21,6 +32,13 @@ import { allPlugins, featuredPlugins, getPluginsData } from "./plugins";
  * 导出 — captureCurrentDocument + downloadAs → /downloadas/ → resolvePendingExport
  * 保存 — 同 URL 无 pendingExport 时 commitUserSave（UI 已禁用，兜底保留）
  */
+
+/**
+ * programmatic export（downloadAs "bin"）完成时 WebSocket save 的占位 URL。
+ * SDK 要求 data 为 truthy 才会标记成功；空字符串会误触发 asc_onError(DirectUrl)。
+ * fVg=true 时走 asc_onDownloadUrl，父页 onDownloadAs 为空实现，不会触发浏览器下载。
+ */
+const PROGRAMMATIC_EXPORT_ACK_URL = "onlyoffice://export/ack";
 
 function mergeBuffers(buffers: Uint8Array[]) {
   const totalLength = buffers.reduce((acc, buffer) => acc + buffer.length, 0);
@@ -42,6 +60,31 @@ function isValidEditorBin(data: Uint8Array) {
   const magic = String.fromCharCode(data[0], data[1], data[2], data[3]);
   return magic === "XLSY" || magic === "DOCY" || magic === "PPTY";
 }
+
+function isPdfBytes(data: Uint8Array) {
+  return (
+    data.length >= 5 &&
+    data[0] === 0x25 &&
+    data[1] === 0x50 &&
+    data[2] === 0x44 &&
+    data[3] === 0x46 &&
+    data[4] === 0x2d
+  );
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string) {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      window.setTimeout(
+        () => reject(new Error(`${label} timed out after ${ms}ms`)),
+        ms,
+      );
+    }),
+  ]);
+}
+
+const PDF_CONVERT_TIMEOUT_MS = 120_000;
 
 function randomId() {
   return Math.random().toString(36).substring(2, 9);
@@ -203,6 +246,10 @@ export class EditorServer {
   private downloadId: string = "";
   /** downloadAs multipart 分片缓冲；保存与导出共用 HTTP 管道，需与 pendingExport 配合区分意图。 */
   private downloadParts: Uint8Array[] = [];
+  /** 当前 downloadAs 请求的 cmd（含 outputformat / isSaveAs / title）。 */
+  private downloadCmd: Record<string, unknown> | null = null;
+  /** 另存为 GET 响应 Content-Disposition 使用的文件名。 */
+  private downloadFileNames = new Map<string, string>();
   /** 用户保存 downloadAs 进行中时阻塞 export，避免分片交错污染 Editor.bin。 */
   private savingDone: Promise<void> = Promise.resolve();
   private finishSaving: (() => void) | null = null;
@@ -252,6 +299,8 @@ export class EditorServer {
     this.loadPromise = null;
     this.downloadId = "";
     this.downloadParts = [];
+    this.downloadCmd = null;
+    this.downloadFileNames.clear();
     this.endSaving();
     this.syncChangesIndex = 0;
     this.participants = [];
@@ -261,8 +310,8 @@ export class EditorServer {
     file: File,
     { fileType, fileName }: { fileType?: string; fileName?: string } = {},
   ) {
-    const title = fileName || file.name;
     this.fileType = fileType || getFileExt(file.name) || "docx";
+    const title = ensureTitleWithExtension(fileName || file.name, this.fileType);
     const documentType = getDocumentType(this.fileType);
     this.id = randomId();
     this.file = file;
@@ -281,7 +330,7 @@ export class EditorServer {
     this.id = randomId();
     this.file = null;
     this.loadPromise = null;
-    this.title = "New Document";
+    this.title = ensureTitleWithExtension("New Document", this.fileType);
     const documentType = getDocumentType(this.fileType);
 
     let binData: Uint8Array | null = null;
@@ -326,11 +375,12 @@ export class EditorServer {
       loader?: (url: string) => Promise<ArrayBuffer>;
     } = {},
   ) {
-    const title = fileName || decodeURIComponent(url.split("/").pop() || "Document")
-    this.fileType = fileType || getFileExt(title) || "docx";
+    const rawTitle =
+      fileName || decodeURIComponent(url.split("/").pop() || "Document");
+    this.fileType = fileType || getFileExt(rawTitle) || "docx";
     const documentType = getDocumentType(this.fileType);
     this.id = randomId();
-    this.title = title;
+    this.title = ensureTitleWithExtension(rawTitle, this.fileType);
     this.loadPromise = this.loadDocument(() => loader(url), this.fileType);
 
     return {
@@ -350,6 +400,15 @@ export class EditorServer {
       title: this.title,
       url: "/" + this.id,
     };
+  }
+
+  /** 另存为产物 blob URL，cache GET 失败时供 getFile 回退下载。 */
+  getStoredOutputUrl(outputName: string) {
+    return this.urlsMap.get(outputName) ?? null;
+  }
+
+  getStoredOutputFileName(outputName: string) {
+    return this.downloadFileNames.get(outputName) ?? null;
   }
 
   getUser() {
@@ -420,6 +479,7 @@ export class EditorServer {
 
     this.downloadParts = [];
     this.downloadId = "";
+    this.downloadCmd = null;
 
     if (this.pendingExport) {
       window.clearTimeout(this.pendingExport.timer);
@@ -537,6 +597,275 @@ export class EditorServer {
   private updateEditorBin(data: Uint8Array) {
     this.fsMap.set("Editor.bin", data);
     this.urlsMap.set("Editor.bin", getUrl(data));
+  }
+
+  /** 与 Document Server 一致：/cache/files/data/{id}/output.{ext}（站点根绝对路径，便于 iframe 代理命中） */
+  private buildDownloadFileUrl(outputName: string, downloadFileName: string) {
+    const params = new URLSearchParams({ filename: downloadFileName });
+    return `/cache/files/data/${this.id}/${outputName}?${params}`;
+  }
+
+  /** 另存为：写入 fsMap，返回带文件名的 HTTP 路径（非 blob URL）。 */
+  private storeDownloadOutput(
+    outputName: string,
+    data: Uint8Array,
+    downloadFileName: string,
+  ) {
+    this.fsMap.set(outputName, data);
+    this.downloadFileNames.set(outputName, downloadFileName);
+    const mimeType = getOnlyOfficeMimeType(
+      getFileExt(outputName.replace(/^output\./, "")),
+    );
+    this.urlsMap.set(outputName, getUrl(data, mimeType));
+    return this.buildDownloadFileUrl(outputName, downloadFileName);
+  }
+
+  /**
+   * 「文件 → 另存为」常 POST Editor.bin + cmd.outputformat，由服务端 x2t 转换。
+   * 仅 isSaveAs 或非法 bin 魔数不足以覆盖该路径。
+   */
+  private isDownloadAsOutput(
+    cmd: Record<string, unknown> | null,
+    input: Uint8Array,
+  ) {
+    if (cmd?.isSaveAs === true) {
+      return true;
+    }
+    if (!isValidEditorBin(input)) {
+      return true;
+    }
+
+    const outputFormat =
+      typeof cmd?.outputformat === "number" ? cmd.outputformat : undefined;
+    if (outputFormat == null || isCanvasBinOutputFormat(outputFormat)) {
+      return false;
+    }
+
+    const targetExt = extensionFromOutputFormat(outputFormat);
+    return Boolean(targetExt && targetExt !== "bin");
+  }
+
+  private async convertEditorBinToOutput(binData: Uint8Array, filetype: string) {
+    const media = Object.fromEntries(
+      Array.from(this.fsMap.entries()).filter(([key]) =>
+        key.startsWith("media/"),
+      ),
+    );
+    const { formatFrom, formatTo } = getX2tExportFormats(filetype, this.fileType);
+    const result = await converter.convert({
+      data: binData.slice().buffer,
+      fileFrom: "Editor.bin",
+      fileTo: `doc.${filetype}`,
+      formatFrom,
+      formatTo,
+      media,
+    });
+
+    if (!result.output?.byteLength) {
+      throw new Error(`Failed to convert Editor.bin to ${filetype}`);
+    }
+
+    return result.output;
+  }
+
+  /** Web 表格 PDF 另存为 POST 的是渲染器 Memory 流，需回退 fsMap / SDK 中的 Editor.bin。 */
+  private resolveEditorBinSource(input: Uint8Array): Uint8Array | null {
+    if (isValidEditorBin(input)) {
+      return input;
+    }
+
+    const fresh = this.options.getFreshEditorBin?.();
+    if (fresh && isValidEditorBin(fresh)) {
+      this.updateEditorBin(fresh);
+      return fresh;
+    }
+
+    const cached = this.fsMap.get("Editor.bin");
+    if (cached && isValidEditorBin(cached)) {
+      return cached;
+    }
+    return null;
+  }
+
+  /**
+   * Editor.bin + pdf.bin（Web SDK Memory 流）→ PDF。
+   * WASM x2t 无 JS 引擎，表格/文档 PDF 另存为必须走此路径（CryptPad 同款）。
+   */
+  private async convertEditorBinToPdf(
+    binData: Uint8Array,
+    pdfRendererStream?: Uint8Array,
+  ) {
+    const media = Object.fromEntries(
+      Array.from(this.fsMap.entries()).filter(([key]) =>
+        key.startsWith("media/"),
+      ),
+    );
+    const { formatFrom, formatTo } = getX2tExportFormats("pdf", this.fileType);
+
+    if (pdfRendererStream?.byteLength) {
+      const result = await converter.convert({
+        data: binData.slice().buffer,
+        fileFrom: "output.bin",
+        fileTo: "output.pdf",
+        media,
+        pdfBin: pdfRendererStream,
+      });
+
+      if (!result.output?.byteLength) {
+        throw new Error("Failed to convert Editor.bin + pdf.bin to PDF");
+      }
+
+      const pdf = new Uint8Array(result.output);
+      if (!isPdfBytes(pdf)) {
+        throw new Error("x2t PDF output is not a valid PDF (pdf.bin path)");
+      }
+
+      return result.output;
+    }
+
+    const result = await converter.convert({
+      data: binData.slice().buffer,
+      fileFrom: "Editor.bin",
+      fileTo: "doc.pdf",
+      formatFrom,
+      formatTo,
+      media,
+    });
+
+    if (!result.output?.byteLength) {
+      throw new Error("Failed to convert Editor.bin to PDF");
+    }
+
+    const pdf = new Uint8Array(result.output);
+    if (!isPdfBytes(pdf)) {
+      throw new Error("x2t PDF output is not a valid PDF");
+    }
+
+    return result.output;
+  }
+
+  /** 表格无 pdf.bin 时的兜底：bin → xlsx → pdf。 */
+  private async convertSpreadsheetBinToPdfFallback(binData: Uint8Array) {
+    const media = Object.fromEntries(
+      Array.from(this.fsMap.entries()).filter(([key]) =>
+        key.startsWith("media/"),
+      ),
+    );
+    const { formatFrom, formatTo } = getX2tExportFormats("pdf", this.fileType);
+
+    try {
+      const direct = await converter.convert({
+        data: binData.slice().buffer,
+        fileFrom: "Editor.bin",
+        fileTo: "doc.pdf",
+        formatFrom,
+        formatTo,
+        media,
+      });
+      if (
+        direct.output?.byteLength &&
+        isPdfBytes(new Uint8Array(direct.output))
+      ) {
+        return direct.output;
+      }
+    } catch (err) {
+      console.warn("[EditorServer] direct spreadsheet bin->pdf failed:", err);
+    }
+
+    const xlsxData = await this.convertEditorBinToOutput(binData, "xlsx");
+    const { formatFrom: xlsxFormatFrom } = getX2tConvertFormats("xlsx");
+    const { formatTo: pdfFormatTo } = getX2tExportFormats("pdf", this.fileType);
+    const result = await converter.convert({
+      data: xlsxData.slice().buffer,
+      fileFrom: "doc.xlsx",
+      fileTo: "doc.pdf",
+      formatFrom: xlsxFormatFrom,
+      formatTo: pdfFormatTo,
+      media,
+    });
+
+    if (!result.output?.byteLength) {
+      throw new Error("Failed to convert spreadsheet Editor.bin to PDF");
+    }
+
+    const pdf = new Uint8Array(result.output);
+    if (!isPdfBytes(pdf)) {
+      throw new Error("x2t spreadsheet PDF output is not a valid PDF");
+    }
+
+    return result.output;
+  }
+
+  private async resolveDownloadOutputData(input: Uint8Array, filetype: string) {
+    const ext = getFileExt(filetype);
+
+    if (ext === "pdf" && isPdfBytes(input)) {
+      return input;
+    }
+
+    if (ext === "pdf") {
+      const binSource = this.resolveEditorBinSource(input);
+      if (!binSource) {
+        throw new Error("PDF export failed: document snapshot unavailable");
+      }
+
+      const pdfRendererStream = isValidEditorBin(input) ? undefined : input;
+
+      try {
+        return new Uint8Array(
+          await withTimeout(
+            this.convertEditorBinToPdf(binSource, pdfRendererStream),
+            PDF_CONVERT_TIMEOUT_MS,
+            "PDF conversion",
+          ),
+        );
+      } catch (err) {
+        if (
+          pdfRendererStream &&
+          getDocumentType(this.fileType) === DocumentType.Cell
+        ) {
+          console.warn(
+            "[EditorServer] pdf.bin path failed, trying spreadsheet fallback:",
+            err,
+          );
+          return new Uint8Array(
+            await this.convertSpreadsheetBinToPdfFallback(binSource),
+          );
+        }
+        throw err;
+      }
+    }
+
+    if (!isValidEditorBin(input)) {
+      return input;
+    }
+
+    return new Uint8Array(
+      await this.convertEditorBinToOutput(input, filetype),
+    );
+  }
+
+  private resolveDownloadFileType(cmd: Record<string, unknown> | null) {
+    const fromOutput = extensionFromOutputFormat(
+      typeof cmd?.outputformat === "number" ? cmd.outputformat : undefined,
+    );
+    if (fromOutput) {
+      return fromOutput;
+    }
+
+    const title = typeof cmd?.title === "string" ? cmd.title : "";
+    return getFileExt(title) || this.fileType;
+  }
+
+  private resolveDownloadFileName(
+    cmd: Record<string, unknown> | null,
+    filetype: string,
+  ) {
+    const title = typeof cmd?.title === "string" ? cmd.title.trim() : "";
+    if (title) {
+      return ensureTitleWithExtension(title, filetype);
+    }
+    return ensureTitleWithExtension(this.title, filetype);
   }
 
   private resolvePendingExport(data: Uint8Array) {
@@ -810,28 +1139,142 @@ export class EditorServer {
     const { id: key } = this;
     // console.log("[msg] server: ", u, key);
 
+    const cacheMatch = u.pathname.match(/\/cache\/files\/data\/([^/]+)\/(.+)$/);
+    if (cacheMatch && req.method === "GET") {
+      const [, , rawName] = cacheMatch;
+      const outputName = decodeURIComponent(rawName.split("?")[0]);
+      const data = this.fsMap.get(outputName);
+      if (!data) {
+        return new Response("Not Found", { status: 404 });
+      }
+
+      const filetype = getFileExt(outputName.replace(/^output\./, ""));
+      const downloadName =
+        this.downloadFileNames.get(outputName) ||
+        ensureTitleWithExtension(this.title, filetype);
+      const mimeType = getOnlyOfficeMimeType(filetype);
+      const encodedName = encodeURIComponent(downloadName).replace(
+        /['()]/g,
+        escape,
+      );
+
+      return new Response(data as Uint8Array<ArrayBuffer>, {
+        status: 200,
+        headers: {
+          "Content-Type": mimeType,
+          "Content-Disposition": `attachment; filename="${downloadName.replace(/"/g, '\\"')}"; filename*=UTF-8''${encodedName}`,
+          "Content-Length": String(data.byteLength),
+        },
+      });
+    }
+
     if (u.pathname.endsWith("/downloadas/" + key)) {
-      const cmd = JSON.parse(u.searchParams.get("cmd") || "{}");
+      const cmd = JSON.parse(u.searchParams.get("cmd") || "{}") as Record<
+        string,
+        unknown
+      >;
       const buffer = await req.arrayBuffer();
 
       console.log("downloadAs -> ", cmd, buffer);
 
-      const download = async () => {
-        const input = mergeBuffers(this.downloadParts);
-        const resolvedExport = this.resolvePendingExport(input);
-        if (!resolvedExport) {
-          // 用户保存（Ctrl+S / 工具栏保存）：保留 bin，走 EventBus，不触发浏览器下载。
-          this.commitUserSave(input);
-        }
-        this.endSaving();
-        return { status: "ok" as const, isExport: resolvedExport };
+      if (
+        cmd.savetype === AscSaveTypes.PartStart ||
+        cmd.savetype === AscSaveTypes.CompleteAll
+      ) {
+        this.downloadCmd = cmd;
+      }
+
+      type DownloadResult = {
+        status: "ok" | "err";
+        isExport: boolean;
+        isSaveAs: boolean;
+        downloadUrl: string;
+        filetype: string;
+        error?: string;
       };
 
-      let result: { status: "ok"; isExport: boolean } = {
+      const download = async (): Promise<DownloadResult> => {
+        const input = mergeBuffers(this.downloadParts);
+        const cmdSnapshot = this.downloadCmd;
+        this.downloadCmd = null;
+
+        const resolvedExport = this.resolvePendingExport(input);
+        if (resolvedExport) {
+          this.endSaving();
+          return {
+            status: "ok",
+            isExport: true,
+            isSaveAs: false,
+            downloadUrl: "",
+            filetype: "bin",
+          };
+        }
+
+        if (this.isDownloadAsOutput(cmdSnapshot, input)) {
+          const filetype = this.resolveDownloadFileType(cmdSnapshot);
+          const outputName = `output.${filetype}`;
+          const downloadFileName = this.resolveDownloadFileName(
+            cmdSnapshot,
+            filetype,
+          );
+          const outputData = await this.resolveDownloadOutputData(
+            input,
+            filetype,
+          );
+          const downloadUrl = this.storeDownloadOutput(
+            outputName,
+            outputData,
+            downloadFileName,
+          );
+          this.endSaving();
+          return {
+            status: "ok",
+            isExport: false,
+            isSaveAs: true,
+            downloadUrl,
+            filetype,
+          };
+        }
+
+        // 用户保存（Ctrl+S / 工具栏保存）：保留 bin，走 EventBus，不触发浏览器下载。
+        this.commitUserSave(input);
+        this.endSaving();
+        return {
+          status: "ok",
+          isExport: false,
+          isSaveAs: false,
+          downloadUrl: this.urlsMap.get("Editor.bin") || "",
+          filetype: this.fileType,
+        };
+      };
+
+      let result: DownloadResult = {
         status: "ok",
         isExport: false,
+        isSaveAs: false,
+        downloadUrl: "",
+        filetype: this.fileType,
       };
       let isFinalChunk = false;
+
+      const finalizeDownload = async () => {
+        try {
+          result = await download();
+        } catch (err) {
+          console.error("[EditorServer] downloadAs failed:", err);
+          this.endSaving();
+          result = {
+            status: "err",
+            isExport: false,
+            isSaveAs: false,
+            downloadUrl: "",
+            filetype: this.fileType,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+        this.downloadParts = [];
+        isFinalChunk = true;
+      };
 
       // OnlyOffice downloadAs 按 PartStart → Part* → Complete(All) 分片 POST。
       switch (cmd.savetype) {
@@ -847,9 +1290,7 @@ export class EditorServer {
           break;
         case AscSaveTypes.Complete:
           this.downloadParts.push(new Uint8Array(buffer));
-          result = await download();
-          this.downloadParts = [];
-          isFinalChunk = true;
+          await finalizeDownload();
           break;
         case AscSaveTypes.CompleteAll:
           if (!this.pendingExport) {
@@ -857,25 +1298,27 @@ export class EditorServer {
           }
           this.downloadId = "_" + Math.round(Math.random() * 1000);
           this.downloadParts = [new Uint8Array(buffer)];
-          result = await download();
-          this.downloadParts = [];
-          isFinalChunk = true;
+          await finalizeDownload();
           break;
       }
 
-      // 仅在最终分片通知 SDK，结束 downloadAs 的「正在下载中」状态。
-      // 中间分片若广播 save 会提前消费回调并误报「未知错误」。
+      // programmatic export 广播占位 URL，让 SDK 标记成功但不触发 getFile 下载。
       if (isFinalChunk) {
-        const downloadUrl = this.urlsMap.get("Editor.bin") || "";
+        const { downloadUrl, filetype, status, error } = result;
+
         setTimeout(() => {
           this.broadcast({
             type: "documentOpen",
             data: {
               type: "save",
-              status: result.status,
-              data: downloadUrl,
-              // export 走 downloadAs("bin")，filetype 须为 bin；空 URL 会触发未知错误。
-              filetype: result.isExport ? "bin" : this.fileType,
+              status,
+              data:
+                status === "ok"
+                  ? result.isExport
+                    ? PROGRAMMATIC_EXPORT_ACK_URL
+                    : downloadUrl
+                  : error || "download failed",
+              filetype,
             },
           });
         }, 100);

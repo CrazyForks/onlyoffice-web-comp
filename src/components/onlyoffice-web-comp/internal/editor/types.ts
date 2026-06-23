@@ -208,6 +208,8 @@ export interface X2tConvertParams {
   csvDelimiter?: number;
   csvDelimiterChar?: string;
   media?: { [key: string]: Uint8Array };
+  /** Web SDK PDF 另存为 POST 的渲染器 Memory 流，x2t 需写入 /working/pdf.bin。 */
+  pdfBin?: Uint8Array;
   fonts?: { [key: string]: Uint8Array };
   fontAliases?: { [key: string]: string };
   fontExportAliases?: { [key: string]: string };
@@ -238,6 +240,8 @@ export type EditorDocumentSnapshot = {
 
 export interface ServerOptions {
   getState?: () => { plugins: PluginMode; readOnly?: boolean };
+  /** PDF 导出时从 SDK 读取最新 Editor.bin（asc_nativeGetFile），避免 fsMap 快照过期导致空白 PDF。 */
+  getFreshEditorBin?: () => Uint8Array | null;
   /** 用户触发保存（非 export/downloadAs 导出）时回调，携带最新文档快照。 */
   onUserSave?: (snapshot: EditorDocumentSnapshot) => void;
 }

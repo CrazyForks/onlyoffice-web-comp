@@ -168,6 +168,7 @@ export class EditorManager {
     this.containerId = containerId;
     this.server = new EditorServer({
       getState: () => ({ plugins: "none", readOnly: this.readOnly }),
+      getFreshEditorBin: () => this.readFreshEditorBinFromSdk(),
       onUserSave: (snapshot) => {
         this.dirty = false;
         this.notifyUserSave(snapshot);
@@ -275,6 +276,28 @@ export class EditorManager {
     }
 
     return api;
+  }
+
+  /** CryptPad 同款：PDF 导出需与 pdf.bin 配对的当前文档 bin，不能用打开时的 fsMap 快照。 */
+  private readFreshEditorBinFromSdk(): Uint8Array | null {
+    try {
+      const file = this.getSdkApi()?.asc_nativeGetFile?.();
+      if (!file) {
+        return null;
+      }
+      if (file instanceof Uint8Array) {
+        return file;
+      }
+      if (file instanceof ArrayBuffer) {
+        return new Uint8Array(file);
+      }
+      if (ArrayBuffer.isView(file)) {
+        return new Uint8Array(file.buffer, file.byteOffset, file.byteLength);
+      }
+    } catch (err) {
+      console.warn("[EditorManager] asc_nativeGetFile failed:", err);
+    }
+    return null;
   }
 
   private installCommentResolveCleanup() {

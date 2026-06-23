@@ -92,13 +92,22 @@ type StaticResource = {
     root: string;
     script: string;
     wasm: string;
+    /** PDF 导出默认字体（单 TTF，别名见 X2T_PDF_FONT_ALIASES） */
+    pdfFonts: {
+      root: string;
+      default: string;
+    };
   };
 };
+
+/** x2t PDF 导出用的唯一本地 TTF 文件名 */
+export const X2T_PDF_DEFAULT_FONT_FILE = "Carlito-Regular.ttf";
 
 function createStaticResource(): StaticResource {
   const onlyofficeSdkRoot = "/packages/onlyoffice/9.3.0";
   /** x2t 与 SDK 同版本目录；磁盘上为 Brotli 预压缩，由 x2t.worker 内 fetch-brotli 自动解压 */
   const x2tRoot = `${onlyofficeSdkRoot}/x2t`;
+  const x2tPdfFontsRoot = `${onlyofficeSdkRoot}/x2t-fonts`;
   const apiJs = "/web-apps/apps/api/documents/api.js";
   const preloadHtml = "/web-apps/apps/api/documents/preload.html";
 
@@ -118,6 +127,10 @@ function createStaticResource(): StaticResource {
       root: x2tRoot,
       script: `${x2tRoot}/x2t.js`,
       wasm: `${x2tRoot}/x2t.wasm`,
+      pdfFonts: {
+        root: x2tPdfFontsRoot,
+        default: `${x2tPdfFontsRoot}/${X2T_PDF_DEFAULT_FONT_FILE}`,
+      },
     },
   };
 }
@@ -156,6 +169,29 @@ export function resolveSiteUrl(origin: string, path: string): string {
 export function getX2tBaseUrl(origin: string): string {
   return resolveSiteUrl(origin, `${STATIC_RESOURCE.x2t.root}/`);
 }
+
+/**
+ * x2t PDF 导出：单份默认 TTF 注册的查找名。
+ * OnlyOffice 表格默认 Carlito（Calibri 替代）；粗体/斜体也指向同一文件以保证可见性。
+ */
+export const X2T_PDF_FONT_ALIASES = [
+  "Carlito.ttf",
+  "Carlito_Bold.ttf",
+  "Carlito_Italic.ttf",
+  "Carlito_Bold_Italic.ttf",
+  "Calibri.ttf",
+  "Calibri_Bold.ttf",
+  "Calibri_Italic.ttf",
+  "Calibri_Bold_Italic.ttf",
+  "Arial.ttf",
+  "Arial_Bold.ttf",
+  "Arial_Italic.ttf",
+  "Arial_Bold_Italic.ttf",
+  "DejaVu Sans.ttf",
+  "DejaVu Sans_Bold.ttf",
+  "DejaVu Sans_Italic.ttf",
+  "DejaVu Sans_Bold_Italic.ttf",
+] as const;
 
 // ── 文档类型 ────────────────────────────────────────────────────
 
