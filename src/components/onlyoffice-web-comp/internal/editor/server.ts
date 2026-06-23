@@ -5,7 +5,6 @@ import {
   Participant,
   AscSaveTypes,
   ServerOptions,
-  DocumentType,
 } from "./types";
 import { emptyDocx, emptyPdf, emptyPptx, emptyXlsx } from "./empty";
 import { convertCsvBufferToXlsxBuffer } from "./csv-to-xlsx";
@@ -70,6 +69,40 @@ function isPdfBytes(data: Uint8Array) {
     data[3] === 0x46 &&
     data[4] === 0x2d
   );
+}
+
+const PDF_MAX_OUTPUT_BYTES = 50 * 1024 * 1024;
+const PDF_EOF_MARKER = new TextEncoder().encode("%%EOF");
+
+function indexOfSubarray(haystack: Uint8Array, needle: Uint8Array) {
+  if (needle.length === 0) {
+    return 0;
+  }
+  outer: for (let i = 0; i <= haystack.length - needle.length; i++) {
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) {
+        continue outer;
+      }
+    }
+    return i;
+  }
+  return -1;
+}
+
+function assertValidPdfOutput(data: Uint8Array, label = "PDF") {
+  if (!isPdfBytes(data)) {
+    throw new Error(`${label} output is not a valid PDF`);
+  }
+  if (data.byteLength > PDF_MAX_OUTPUT_BYTES) {
+    throw new Error(
+      `${label} output too large (${data.byteLength} bytes); x2t conversion likely corrupt`,
+    );
+  }
+  const scanLen = Math.min(data.byteLength, 1024 * 1024);
+  const tail = data.subarray(data.byteLength - scanLen);
+  if (indexOfSubarray(tail, PDF_EOF_MARKER) < 0) {
+    throw new Error(`${label} output is corrupt (missing %%EOF trailer)`);
+  }
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string) {
@@ -668,18 +701,13 @@ export class EditorServer {
     return result.output;
   }
 
-  /** Web 表格 PDF 另存为 POST 的是渲染器 Memory 流，需回退 fsMap / SDK 中的 Editor.bin。 */
+  /** Web 表格 PDF 另存为 POST 的是渲染器 Memory 流，需回退 fsMap 中的 Editor.bin。 */
   private resolveEditorBinSource(input: Uint8Array): Uint8Array | null {
     if (isValidEditorBin(input)) {
       return input;
     }
 
-    const fresh = this.options.getFreshEditorBin?.();
-    if (fresh && isValidEditorBin(fresh)) {
-      this.updateEditorBin(fresh);
-      return fresh;
-    }
-
+    // 禁止在 downloadAs 中调用 asc_nativeGetFile（getFreshEditorBin）：SDK 等 HTTP 响应时会死锁。
     const cached = this.fsMap.get("Editor.bin");
     if (cached && isValidEditorBin(cached)) {
       return cached;
@@ -715,11 +743,7 @@ export class EditorServer {
         throw new Error("Failed to convert Editor.bin + pdf.bin to PDF");
       }
 
-      const pdf = new Uint8Array(result.output);
-      if (!isPdfBytes(pdf)) {
-        throw new Error("x2t PDF output is not a valid PDF (pdf.bin path)");
-      }
-
+      assertValidPdfOutput(new Uint8Array(result.output), "pdf.bin");
       return result.output;
     }
 
@@ -736,63 +760,7 @@ export class EditorServer {
       throw new Error("Failed to convert Editor.bin to PDF");
     }
 
-    const pdf = new Uint8Array(result.output);
-    if (!isPdfBytes(pdf)) {
-      throw new Error("x2t PDF output is not a valid PDF");
-    }
-
-    return result.output;
-  }
-
-  /** 表格无 pdf.bin 时的兜底：bin → xlsx → pdf。 */
-  private async convertSpreadsheetBinToPdfFallback(binData: Uint8Array) {
-    const media = Object.fromEntries(
-      Array.from(this.fsMap.entries()).filter(([key]) =>
-        key.startsWith("media/"),
-      ),
-    );
-    const { formatFrom, formatTo } = getX2tExportFormats("pdf", this.fileType);
-
-    try {
-      const direct = await converter.convert({
-        data: binData.slice().buffer,
-        fileFrom: "Editor.bin",
-        fileTo: "doc.pdf",
-        formatFrom,
-        formatTo,
-        media,
-      });
-      if (
-        direct.output?.byteLength &&
-        isPdfBytes(new Uint8Array(direct.output))
-      ) {
-        return direct.output;
-      }
-    } catch (err) {
-      console.warn("[EditorServer] direct spreadsheet bin->pdf failed:", err);
-    }
-
-    const xlsxData = await this.convertEditorBinToOutput(binData, "xlsx");
-    const { formatFrom: xlsxFormatFrom } = getX2tConvertFormats("xlsx");
-    const { formatTo: pdfFormatTo } = getX2tExportFormats("pdf", this.fileType);
-    const result = await converter.convert({
-      data: xlsxData.slice().buffer,
-      fileFrom: "doc.xlsx",
-      fileTo: "doc.pdf",
-      formatFrom: xlsxFormatFrom,
-      formatTo: pdfFormatTo,
-      media,
-    });
-
-    if (!result.output?.byteLength) {
-      throw new Error("Failed to convert spreadsheet Editor.bin to PDF");
-    }
-
-    const pdf = new Uint8Array(result.output);
-    if (!isPdfBytes(pdf)) {
-      throw new Error("x2t spreadsheet PDF output is not a valid PDF");
-    }
-
+    assertValidPdfOutput(new Uint8Array(result.output));
     return result.output;
   }
 
@@ -820,19 +788,9 @@ export class EditorServer {
           ),
         );
       } catch (err) {
-        if (
-          pdfRendererStream &&
-          getDocumentType(this.fileType) === DocumentType.Cell
-        ) {
-          console.warn(
-            "[EditorServer] pdf.bin path failed, trying spreadsheet fallback:",
-            err,
-          );
-          return new Uint8Array(
-            await this.convertSpreadsheetBinToPdfFallback(binSource),
-          );
-        }
-        throw err;
+        throw err instanceof Error
+          ? err
+          : new Error("PDF export failed", { cause: err });
       }
     }
 

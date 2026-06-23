@@ -92,7 +92,7 @@ type StaticResource = {
     root: string;
     script: string;
     wasm: string;
-    /** PDF 导出默认字体（单 TTF，别名见 X2T_PDF_FONT_ALIASES） */
+    /** PDF 导出字体目录（见 X2T_PDF_FONT_MANIFEST） */
     pdfFonts: {
       root: string;
       default: string;
@@ -100,8 +100,61 @@ type StaticResource = {
   };
 };
 
-/** x2t PDF 导出用的唯一本地 TTF 文件名 */
+/** @deprecated 使用 X2T_PDF_FONT_MANIFEST[0].file */
 export const X2T_PDF_DEFAULT_FONT_FILE = "Carlito-Regular.ttf";
+
+/**
+ * x2t PDF 字体：每款 TTF 独立二进制 + 别名。
+ * - Carlito 四款 → Calibri（表格 styles 粗斜体）
+ * - Arial 四款 → Arial（西文/数字，勿映射到 DroidSansFallback 否则会乱码）
+ * - DroidSansFallback → 仅中文常用名（宋体/微软雅黑等）
+ */
+export const X2T_PDF_FONT_MANIFEST = [
+  {
+    file: "Carlito-Regular.ttf",
+    aliases: ["Carlito.ttf", "Calibri.ttf"],
+  },
+  {
+    file: "Carlito-Bold.ttf",
+    aliases: ["Carlito_Bold.ttf", "Calibri_Bold.ttf"],
+  },
+  {
+    file: "Carlito-Italic.ttf",
+    aliases: ["Carlito_Italic.ttf", "Calibri_Italic.ttf"],
+  },
+  {
+    file: "Carlito-BoldItalic.ttf",
+    aliases: ["Carlito_Bold_Italic.ttf", "Calibri_Bold_Italic.ttf"],
+  },
+  {
+    file: "Arial-Regular.ttf",
+    aliases: ["Arial.ttf"],
+  },
+  {
+    file: "Arial-Bold.ttf",
+    aliases: ["Arial_Bold.ttf"],
+  },
+  {
+    file: "Arial-Italic.ttf",
+    aliases: ["Arial_Italic.ttf"],
+  },
+  {
+    file: "Arial-BoldItalic.ttf",
+    aliases: ["Arial_Bold_Italic.ttf"],
+  },
+  {
+    file: "DroidSansFallback.ttf",
+    aliases: [
+      "Droid Sans Fallback.ttf",
+      "SimSun.ttf",
+      "NSimSun.ttf",
+      "宋体.ttf",
+      "Microsoft YaHei.ttf",
+      "微软雅黑.ttf",
+      "PingFang SC.ttf",
+    ],
+  },
+] as const;
 
 function createStaticResource(): StaticResource {
   const onlyofficeSdkRoot = "/packages/onlyoffice/9.3.0";
@@ -169,29 +222,6 @@ export function resolveSiteUrl(origin: string, path: string): string {
 export function getX2tBaseUrl(origin: string): string {
   return resolveSiteUrl(origin, `${STATIC_RESOURCE.x2t.root}/`);
 }
-
-/**
- * x2t PDF 导出：单份默认 TTF 注册的查找名。
- * OnlyOffice 表格默认 Carlito（Calibri 替代）；粗体/斜体也指向同一文件以保证可见性。
- */
-export const X2T_PDF_FONT_ALIASES = [
-  "Carlito.ttf",
-  "Carlito_Bold.ttf",
-  "Carlito_Italic.ttf",
-  "Carlito_Bold_Italic.ttf",
-  "Calibri.ttf",
-  "Calibri_Bold.ttf",
-  "Calibri_Italic.ttf",
-  "Calibri_Bold_Italic.ttf",
-  "Arial.ttf",
-  "Arial_Bold.ttf",
-  "Arial_Italic.ttf",
-  "Arial_Bold_Italic.ttf",
-  "DejaVu Sans.ttf",
-  "DejaVu Sans_Bold.ttf",
-  "DejaVu Sans_Italic.ttf",
-  "DejaVu Sans_Bold_Italic.ttf",
-] as const;
 
 // ── 文档类型 ────────────────────────────────────────────────────
 

@@ -1,23 +1,27 @@
 import {
   STATIC_RESOURCE,
   resolveSiteUrl,
-  X2T_PDF_FONT_ALIASES,
+  X2T_PDF_FONT_MANIFEST,
 } from "../../const";
 
 let cachedFonts: Record<string, Uint8Array> | null = null;
 let loadingPromise: Promise<Record<string, Uint8Array>> | null = null;
 
-async function fetchDefaultPdfFont(origin: string) {
-  const response = await fetch(
-    resolveSiteUrl(origin, STATIC_RESOURCE.x2t.pdfFonts.default),
+async function fetchPdfFontFile(origin: string, file: string) {
+  const url = resolveSiteUrl(
+    origin,
+    `${STATIC_RESOURCE.x2t.pdfFonts.root}/${file}`,
   );
+  const response = await fetch(url);
   if (!response.ok) {
+    console.warn("[x2t-pdf-fonts] font fetch failed:", url, response.status);
     return null;
   }
-  return new Uint8Array(await response.arrayBuffer());
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  return bytes.byteLength ? bytes : null;
 }
 
-/** 加载 PDF 导出默认 TTF（单文件、多别名），结果缓存在内存中。 */
+/** 加载 PDF 导出字体，结果缓存在内存中。 */
 export async function loadX2tPdfFonts(
   origin: string,
 ): Promise<Record<string, Uint8Array>> {
@@ -29,23 +33,28 @@ export async function loadX2tPdfFonts(
   }
 
   loadingPromise = (async () => {
-    const bytes = await fetchDefaultPdfFont(origin);
-    if (!bytes?.byteLength) {
-      console.warn(
-        "[x2t-pdf-fonts] default font missing:",
-        STATIC_RESOURCE.x2t.pdfFonts.default,
-      );
-      cachedFonts = {};
-      return cachedFonts;
+    const fonts: Record<string, Uint8Array> = {};
+
+    for (const entry of X2T_PDF_FONT_MANIFEST) {
+      const bytes = await fetchPdfFontFile(origin, entry.file);
+      if (!bytes) {
+        continue;
+      }
+      for (const alias of entry.aliases) {
+        fonts[alias] = bytes;
+      }
     }
 
-    const fonts: Record<string, Uint8Array> = {};
-    for (const name of X2T_PDF_FONT_ALIASES) {
-      fonts[name] = bytes;
+    if (!fonts["Carlito.ttf"]?.byteLength) {
+      console.warn(
+        "[x2t-pdf-fonts] Carlito regular missing under",
+        STATIC_RESOURCE.x2t.pdfFonts.root,
+      );
+      return {};
     }
 
     cachedFonts = fonts;
-    return fonts;
+    return cachedFonts;
   })();
 
   try {

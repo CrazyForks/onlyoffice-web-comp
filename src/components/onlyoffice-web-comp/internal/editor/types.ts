@@ -240,8 +240,6 @@ export type EditorDocumentSnapshot = {
 
 export interface ServerOptions {
   getState?: () => { plugins: PluginMode; readOnly?: boolean };
-  /** PDF 导出时从 SDK 读取最新 Editor.bin（asc_nativeGetFile），避免 fsMap 快照过期导致空白 PDF。 */
-  getFreshEditorBin?: () => Uint8Array | null;
   /** 用户触发保存（非 export/downloadAs 导出）时回调，携带最新文档快照。 */
   onUserSave?: (snapshot: EditorDocumentSnapshot) => void;
 }
