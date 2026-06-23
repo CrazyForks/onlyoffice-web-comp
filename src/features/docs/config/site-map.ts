@@ -112,6 +112,14 @@ export const DOC_ENTRIES: MarkdownDoc[] = [
   },
   {
     kind: "markdown",
+    slug: "fonts",
+    file: "10-字体配置.md",
+    label: "字体配置",
+    href: "/docs/fonts",
+    section: "reference",
+  },
+  {
+    kind: "markdown",
     slug: "word-api",
     file: "07-批注修订与-Word-API.md",
     label: "批注与 Word API",

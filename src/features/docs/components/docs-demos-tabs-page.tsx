@@ -4,11 +4,14 @@
  * 示例页：按侧栏 `?tab=` 渲染对应 Markdown，并在简介后嵌入 live demo。
  * Markdown 源文件：`onlyoffice-web-comp/docs/08|09-*.md`
  */
+import { useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { OfficePreviewPage } from "@/features/demo/office-preview-page";
 import { TabsMultiPage } from "@/features/demo/tabs-multi-page";
 import { FILE_TYPE } from "@/components/onlyoffice-web-comp";
 import type { DemoTabId } from "../config/site-map";
+import { getTocHeadings } from "../lib/extract-headings";
+import { DocToc } from "./doc-toc";
 import { MarkdownContent } from "./markdown-content";
 
 type DocsDemosTabsPageProps = {
@@ -32,14 +35,19 @@ function isDemoTab(value: string | null): DemoTabId {
 export function DocsDemosTabsPage({ contents }: DocsDemosTabsPageProps) {
   const searchParams = useSearchParams();
   const activeTab = isDemoTab(searchParams.get("tab"));
-  const { intro, body } = splitDemoMarkdown(contents[activeTab]);
+  const fullContent = contents[activeTab];
+  const { intro, body } = splitDemoMarkdown(fullContent);
+  const tocHeadings = useMemo(() => getTocHeadings(fullContent), [fullContent]);
 
   return (
-    <div className="w-full max-w-full">
-      <MarkdownContent content={intro} />
+    <div className="docs-article-layout w-full max-w-full">
+      <div className="min-w-0">
+        <MarkdownContent content={intro} showToc={false} />
 
-      <section className="docs-demo-section">
-        <h2 className="docs-md-h2">在线演示</h2>
+        <section className="docs-demo-section">
+          <h2 id="在线演示" className="docs-md-h2 scroll-mt-24">
+            在线演示
+          </h2>
         <div
           className={`docs-demo-shell ${
             activeTab === "single"
@@ -70,7 +78,10 @@ export function DocsDemosTabsPage({ contents }: DocsDemosTabsPageProps) {
         </div>
       </section>
 
-      {body ? <MarkdownContent content={body} /> : null}
+        {body ? <MarkdownContent content={body} showToc={false} /> : null}
+      </div>
+
+      <DocToc headings={tocHeadings} />
     </div>
   );
 }

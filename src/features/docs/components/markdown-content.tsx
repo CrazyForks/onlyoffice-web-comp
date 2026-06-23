@@ -2,17 +2,34 @@
 
 /**
  * 将组件库 Markdown 渲染为文档站 HTML，并改写 `./xx.md` 为站内路由。
+ * 本页目录：右侧 sticky，由 h1/h2 自动生成；锚点：rehype-slug。
  */
 import Link from "next/link";
+import { useMemo } from "react";
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
+import rehypeSlug from "rehype-slug";
 import remarkGfm from "remark-gfm";
 import { resolveMarkdownHref } from "../config/site-map";
+import { getTocHeadings } from "../lib/extract-headings";
+import { DocToc } from "./doc-toc";
 
 const components: Components = {
-  h1: ({ children }) => <h1 className="docs-md-h1">{children}</h1>,
-  h2: ({ children }) => <h2 className="docs-md-h2">{children}</h2>,
-  h3: ({ children }) => <h3 className="docs-md-h3">{children}</h3>,
+  h1: ({ id, children }) => (
+    <h1 id={id} className="docs-md-h1 scroll-mt-24">
+      {children}
+    </h1>
+  ),
+  h2: ({ id, children }) => (
+    <h2 id={id} className="docs-md-h2 scroll-mt-24">
+      {children}
+    </h2>
+  ),
+  h3: ({ id, children }) => (
+    <h3 id={id} className="docs-md-h3 scroll-mt-24">
+      {children}
+    </h3>
+  ),
   p: ({ children }) => <p className="docs-md-p">{children}</p>,
   ul: ({ children }) => <ul className="docs-md-ul">{children}</ul>,
   ol: ({ children }) => <ol className="docs-md-ol">{children}</ol>,
@@ -83,14 +100,32 @@ const components: Components = {
 
 type MarkdownContentProps = {
   content: string;
+  showToc?: boolean;
 };
 
-export function MarkdownContent({ content }: MarkdownContentProps) {
-  return (
-    <article className="docs-markdown w-full max-w-full">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+export function MarkdownContent({ content, showToc = true }: MarkdownContentProps) {
+  const tocHeadings = useMemo(() => getTocHeadings(content), [content]);
+
+  const article = (
+    <article className="docs-markdown w-full min-w-0 max-w-full">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeSlug]}
+        components={components}
+      >
         {content}
       </ReactMarkdown>
     </article>
+  );
+
+  if (!showToc) {
+    return article;
+  }
+
+  return (
+    <div className="docs-article-layout">
+      {article}
+      <DocToc headings={tocHeadings} />
+    </div>
   );
 }

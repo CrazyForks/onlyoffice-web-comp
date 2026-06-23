@@ -1,6 +1,6 @@
 # 07 - 批注修订与 Word API
 
-[← 注意事项](./06-注意事项与支持格式.md) | [概述](./00-概述.md)
+[← 字体配置](./10-字体配置.md) | [概述](./00-概述.md)
 
 `EditorManager` 封装了 Word 文档的批注、修订能力，以及 OnlyOffice iframe 内 SDK 的回调订阅。通过 `OnlyOfficeManager.getEditor()` 获取底层实例。
 

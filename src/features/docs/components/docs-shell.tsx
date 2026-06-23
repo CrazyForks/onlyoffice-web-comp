@@ -15,7 +15,7 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="docs-layout w-full overflow-x-clip">
-      <div className="docs-layout-inner mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
+      <div className="docs-layout-inner mx-auto w-full max-w-[90rem] px-4 sm:px-6 lg:px-8">
         <div className="grid w-full grid-cols-1 gap-8 py-6 sm:gap-10 sm:py-8 lg:grid-cols-[minmax(0,220px)_minmax(0,1fr)] lg:gap-14 lg:py-12">
           <aside className="w-full min-w-0 lg:sticky lg:top-20 lg:self-start">
             <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-neutral-400">

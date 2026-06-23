@@ -1,13 +1,6 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import ClientLayoutWrapper from './ClientLayoutWrapper';
 import "./globals.css";
-
-const inter = Inter({
-  subsets: ["latin"],
-  display: "swap",
-  variable: "--font-inter",
-});
 
 export const metadata: Metadata = {
   title: "OnlyOffice Web Comp",
@@ -20,8 +13,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-CN" className={inter.variable}>
-      <body className={`${inter.className} antialiased`}>
+    <html lang="zh-CN">
+      <body className="antialiased">
         <ClientLayoutWrapper>
           {children}
         </ClientLayoutWrapper>

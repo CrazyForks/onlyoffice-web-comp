@@ -18,6 +18,7 @@ A **browser-side document editor component library** built on the OnlyOffice sta
 | 05 | [API Reference](./docs/05-API参考.md) | Constants and types |
 | 06 | [Notes & Formats](./docs/06-注意事项与支持格式.md) | Prerequisites, formats, pitfalls |
 | 07 | [Comments, Revisions & Word API](./docs/07-批注修订与-Word-API.md) | Comments, revisions, SDK callbacks |
+| 10 | [Fonts](./docs/10-字体配置.md) | `__custom_font_registry__`, catalog conversion |
 | 08 | [Single-instance Demo](./docs/08-单实例示例.md) | Single editor demo + source walkthrough |
 | 09 | [Multi-instance Demo](./docs/09-多实例示例.md) | Full Tab demo source |
 

@@ -60,6 +60,7 @@ Legacy routes `/examples` and `/multi` redirect to the multi-instance demo tab.
 | [04 Examples](src/components/onlyoffice-web-comp/docs/04-完整示例.md) | React integration patterns |
 | [05 Reference](src/components/onlyoffice-web-comp/docs/05-API参考.md) | Constants and types |
 | [06 Notes & Formats](src/components/onlyoffice-web-comp/docs/06-注意事项与支持格式.md) | Prerequisites and formats |
+| [10 Fonts](src/components/onlyoffice-web-comp/docs/10-字体配置.md) | Custom font registration |
 | [07 Comments & Revisions](src/components/onlyoffice-web-comp/docs/07-批注修订与-Word-API.md) | Comments and revisions |
 | [08 Single-instance Demo](src/components/onlyoffice-web-comp/docs/08-单实例示例.md) | Single editor demo + source |
 | [09 Multi-instance Demo](src/components/onlyoffice-web-comp/docs/09-多实例示例.md) | Full Tab demo source |
@@ -110,49 +111,13 @@ Deploy to Vercel or any static host. Live demo: https://onlyoffice-web-comp.verc
 
 ## Fonts
 
-Custom fonts are registered via **`__custom_font_registry__`**, with **`ttf-to-catalog-font.mjs`** producing OnlyOffice catalog wire-format files.
+Custom fonts are registered via **`__custom_font_registry__`**, with **`ttf-to-catalog-font.mjs`** producing OnlyOffice catalog wire-format files. See **[10 - Fonts](src/components/onlyoffice-web-comp/docs/10-字体配置.md)** in the component docs for the full guide.
 
-### 1. Convert TTF/OTF to catalog wire format
+Quick outline:
 
-Script:
-
-`public/packages/onlyoffice/9.3.0/fonts/ttf-to-catalog-font.mjs`
-
-Place the source font next to the script (e.g. `1001.ttf`), or pass an explicit input path:
-
-```bash
-# Read 1001.ttf from the same directory → public/packages/onlyoffice/9.3.0/fonts/1001
-node public/packages/onlyoffice/9.3.0/fonts/ttf-to-catalog-font.mjs --id 1001 --verify
-
-# Explicit source file
-node public/packages/onlyoffice/9.3.0/fonts/ttf-to-catalog-font.mjs ./MyFont.ttf --id 1001 --verify
-```
-
-Output is an extensionless catalog file: `public/packages/onlyoffice/9.3.0/fonts/{id}`.
-
-A copy also lives at `src/components/onlyoffice-web-comp/scripts/fonts/ttf-to-catalog-font.mjs`.
-
-### 2. Register aliases in `__custom_font_registry__`
-
-Edit `public/packages/onlyoffice/9.3.0/sdkjs/common/AllFonts.js`:
-
-```javascript
-window["__custom_font_registry__"] = {
-  "1001": [
-    "仿宋_GB2312",
-    "Slidefu",
-    "Slidefu Regular",
-    "演示佛系体",
-  ],
-};
-```
-
-- **Keys** (e.g. `"1001"`) must match the `--id` and the filename under `fonts/`
-- **Values** are alias arrays covering every font name used in your documents
-
-### 3. Built-in fonts (optional)
-
-Built-in glyphs still use **numeric indices** in `__fonts_files`. To replace one, place a catalog wire file at `public/packages/onlyoffice/9.3.0/fonts/{index}` (no extension) using the index from that array.
+1. Run `ttf-to-catalog-font.mjs --id <id> --verify` to produce `fonts/{id}` catalog files
+2. Register the id and aliases in `window["__custom_font_registry__"]` inside `AllFonts.js`
+3. Ensure aliases cover every font name used in your documents
 
 Ensure all font files comply with applicable licenses.
 

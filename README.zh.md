@@ -60,6 +60,7 @@ pnpm dev
 | [04-完整示例](src/components/onlyoffice-web-comp/docs/04-完整示例.md) | React 集成模式 |
 | [05-API参考](src/components/onlyoffice-web-comp/docs/05-API参考.md) | 常量与类型 |
 | [06-注意事项与格式](src/components/onlyoffice-web-comp/docs/06-注意事项与支持格式.md) | 前置条件与格式 |
+| [10-字体配置](src/components/onlyoffice-web-comp/docs/10-字体配置.md) | 自定义字体注册 |
 | [07-批注修订](src/components/onlyoffice-web-comp/docs/07-批注修订与-Word-API.md) | 批注、修订 |
 | [08-单实例示例](src/components/onlyoffice-web-comp/docs/08-单实例示例.md) | 单实例 Demo 与源码说明 |
 | [09-多实例示例](src/components/onlyoffice-web-comp/docs/09-多实例示例.md) | Tab 多实例完整源码 |
@@ -110,49 +111,13 @@ pnpm build
 
 ## 字体配置
 
-自定义字体通过 **`__custom_font_registry__`** 注册，配合 **`ttf-to-catalog-font.mjs`** 生成 OnlyOffice catalog 线格式。
+自定义字体通过 **`__custom_font_registry__`** 注册，配合 **`ttf-to-catalog-font.mjs`** 生成 OnlyOffice catalog 线格式。完整步骤见组件库文档 **[10 - 字体配置](src/components/onlyoffice-web-comp/docs/10-字体配置.md)**。
 
-### 1. TTF/OTF 转为 catalog 线格式
+简要流程：
 
-脚本位置：
-
-`public/packages/onlyoffice/9.3.0/fonts/ttf-to-catalog-font.mjs`
-
-将源字体放到脚本同目录（如 `1001.ttf`），或显式指定输入文件：
-
-```bash
-# 从同目录读取 1001.ttf，写入 public/packages/onlyoffice/9.3.0/fonts/1001
-node public/packages/onlyoffice/9.3.0/fonts/ttf-to-catalog-font.mjs --id 1001 --verify
-
-# 指定源文件
-node public/packages/onlyoffice/9.3.0/fonts/ttf-to-catalog-font.mjs ./MyFont.ttf --id 1001 --verify
-```
-
-产物为 **无扩展名** 的 catalog 文件：`public/packages/onlyoffice/9.3.0/fonts/{id}`。
-
-组件库内也有一份脚本副本：`src/components/onlyoffice-web-comp/scripts/fonts/ttf-to-catalog-font.mjs`。
-
-### 2. 在 `__custom_font_registry__` 中注册别名
-
-编辑 `public/packages/onlyoffice/9.3.0/sdkjs/common/AllFonts.js`：
-
-```javascript
-window["__custom_font_registry__"] = {
-  "1001": [
-    "仿宋_GB2312",
-    "Slidefu",
-    "Slidefu Regular",
-    "演示佛系体",
-  ],
-};
-```
-
-- **键**（如 `"1001"`）必须与上一步 `--id` 及 `fonts/` 下的文件名一致
-- **值**为别名数组，需覆盖 Word / Excel / PPT 文档中实际使用的字体名
-
-### 3. 内置字体（可选）
-
-SDK 自带的内置字体仍通过 `AllFonts.js` 中 `__fonts_files` 的**数字索引**引用。若需替换某内置字形，将 catalog 线格式文件放到 `public/packages/onlyoffice/9.3.0/fonts/{索引号}`（无扩展名），索引号可在 `__fonts_files` 数组中查找。
+1. 运行 `ttf-to-catalog-font.mjs --id <id> --verify` 生成 `fonts/{id}` catalog 文件
+2. 在 `AllFonts.js` 的 `window["__custom_font_registry__"]` 中注册 id 与别名
+3. 确保别名覆盖文档内实际使用的字体名
 
 请确保所用字体文件符合相关许可协议。
 

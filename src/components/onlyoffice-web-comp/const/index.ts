@@ -87,7 +87,6 @@ type StaticResource = {
     preloadHtml: string;
     apiUrl: string;
     preloadUrl: string;
-    fontUrl: (fontId: string) => string;
   };
   x2t: {
     root: string;
@@ -114,7 +113,6 @@ function createStaticResource(): StaticResource {
       preloadHtml,
       apiUrl: onlyofficeSdkRoot + apiJs,
       preloadUrl: onlyofficeSdkRoot + preloadHtml,
-      fontUrl: (fontId: string) => `${onlyofficeSdkRoot}/fonts/${fontId}`,
     },
     x2t: {
       root: x2tRoot,
@@ -138,7 +136,6 @@ export const ONLYOFFICE_RESOURCE = {
   PRELOAD_HTML: STATIC_RESOURCE.onlyoffice.preloadHtml,
   API_URL: STATIC_RESOURCE.onlyoffice.apiUrl,
   PRELOAD_URL: STATIC_RESOURCE.onlyoffice.preloadUrl,
-  fontUrl: STATIC_RESOURCE.onlyoffice.fontUrl,
 } as const;
 
 /** @deprecated 使用 STATIC_RESOURCE.x2t */
