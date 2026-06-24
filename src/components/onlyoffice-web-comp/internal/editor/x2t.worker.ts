@@ -100,6 +100,10 @@ function shouldRewriteZipEntry(name: string) {
   );
 }
 
+function shouldRewriteDocxBookmarkEntry(name: string) {
+  return /^word\/.+\.xml$/i.test(name);
+}
+
 function rewriteFontText(text: string, aliases?: Record<string, string>) {
   if (!aliases) return text;
 
@@ -123,6 +127,56 @@ function rewriteFontText(text: string, aliases?: Record<string, string>) {
 
 function hasOfficeZipExtension(fileName: string) {
   return /\.(docx|xlsx|pptx)$/i.test(fileName);
+}
+
+function hasDocxExtension(fileName: string) {
+  return /\.docx$/i.test(fileName);
+}
+
+function isDecimalBookmarkId(value: string) {
+  return /^\d+$/.test(value);
+}
+
+function normalizeDocxBookmarkIds(text: string) {
+  const bookmarkTagPattern =
+    /<w:bookmark(Start|End)\b[^>]*\bw:id="([^"]*)"[^>]*>/g;
+  const usedNumericIds = new Set<string>();
+  let maxNumericId = -1;
+  let hasInvalidId = false;
+
+  text.replace(bookmarkTagPattern, (_tag, _kind, id: string) => {
+    if (isDecimalBookmarkId(id)) {
+      usedNumericIds.add(id);
+      maxNumericId = Math.max(maxNumericId, Number(id));
+    } else {
+      hasInvalidId = true;
+    }
+    return _tag;
+  });
+
+  if (!hasInvalidId) return text;
+
+  const remappedIds = new Map<string, string>();
+  const nextId = () => {
+    do {
+      maxNumericId += 1;
+    } while (usedNumericIds.has(String(maxNumericId)));
+
+    const value = String(maxNumericId);
+    usedNumericIds.add(value);
+    return value;
+  };
+
+  return text.replace(bookmarkTagPattern, (tag, _kind, id: string) => {
+    if (isDecimalBookmarkId(id)) return tag;
+
+    let mapped = remappedIds.get(id);
+    if (!mapped) {
+      mapped = nextId();
+      remappedIds.set(id, mapped);
+    }
+    return tag.replace(/\bw:id="[^"]*"/, `w:id="${mapped}"`);
+  });
 }
 
 function encodeUtf16Le(value: string) {
@@ -199,17 +253,12 @@ function restoreEditorBinFontNames(
   return output;
 }
 
-async function rewriteZipFontNames(
+async function rewriteOfficeZipText(
   data: ArrayBuffer,
-  fileFrom: string,
-  fontAliases?: Record<string, string>,
+  shouldRewriteEntry: (name: string) => boolean,
+  rewriteText: (text: string, name: string) => string,
 ) {
-  if (
-    !fontAliases ||
-    !hasOfficeZipExtension(fileFrom) ||
-    !("TextDecoder" in self) ||
-    !("TextEncoder" in self)
-  ) {
+  if (!("TextDecoder" in self) || !("TextEncoder" in self)) {
     return data;
   }
 
@@ -231,6 +280,7 @@ async function rewriteZipFontNames(
   const centralParts: Uint8Array[] = [];
   let readOffset = centralOffset;
   let outputOffset = 0;
+  let changed = false;
 
   for (let i = 0; i < entryCount; i++) {
     if (readU32(input, readOffset) !== 0x02014b50) return data;
@@ -259,7 +309,7 @@ async function rewriteZipFontNames(
     let outputCrc = crc;
     let outputUncompressedSize = uncompressedSize;
 
-    if (shouldRewriteZipEntry(name)) {
+    if (shouldRewriteEntry(name)) {
       const uncompressed =
         method === 0
           ? compressed
@@ -267,13 +317,16 @@ async function rewriteZipFontNames(
             ? await decompressDeflateRaw(compressed)
             : null;
       if (uncompressed) {
-        const rewritten = encoder.encode(
-          rewriteFontText(decoder.decode(uncompressed), fontAliases),
-        );
-        outputData = rewritten;
-        outputMethod = 0;
-        outputCrc = crc32(rewritten);
-        outputUncompressedSize = rewritten.length;
+        const originalText = decoder.decode(uncompressed);
+        const rewrittenText = rewriteText(originalText, name);
+        if (rewrittenText !== originalText) {
+          const rewritten = encoder.encode(rewrittenText);
+          outputData = rewritten;
+          outputMethod = 0;
+          outputCrc = crc32(rewritten);
+          outputUncompressedSize = rewritten.length;
+          changed = true;
+        }
       }
     }
 
@@ -325,7 +378,33 @@ async function rewriteZipFontNames(
   writeU32(end, 12, centralDirectory.length);
   writeU32(end, 16, outputOffset);
 
-  return concatBytes([...localParts, centralDirectory, end]).buffer;
+  return changed ? concatBytes([...localParts, centralDirectory, end]).buffer : data;
+}
+
+async function rewriteZipFontNames(
+  data: ArrayBuffer,
+  fileFrom: string,
+  fontAliases?: Record<string, string>,
+) {
+  if (!fontAliases || !hasOfficeZipExtension(fileFrom)) {
+    return data;
+  }
+
+  return rewriteOfficeZipText(data, shouldRewriteZipEntry, (text) =>
+    rewriteFontText(text, fontAliases),
+  );
+}
+
+async function sanitizeDocxForX2t(data: ArrayBuffer, fileFrom: string) {
+  if (!hasDocxExtension(fileFrom)) {
+    return data;
+  }
+
+  return rewriteOfficeZipText(
+    data,
+    shouldRewriteDocxBookmarkEntry,
+    normalizeDocxBookmarkIds,
+  );
 }
 
 /**
@@ -595,9 +674,11 @@ async function convert({
   csvDelimiter,
   csvDelimiterChar,
 }: X2tConvertParams): Promise<X2tConvertResult> {
-  const preparedData = data
-    ? await rewriteZipFontNames(data, fileFrom, fontAliases)
-    : data;
+  let preparedData = data;
+  if (preparedData) {
+    preparedData = await sanitizeDocxForX2t(preparedData, fileFrom);
+    preparedData = await rewriteZipFontNames(preparedData, fileFrom, fontAliases);
+  }
   const fromPath = "/working/" + fileFrom;
   const toPath = "/working/" + fileTo;
   const files = [fromPath, toPath, xmlPath];
