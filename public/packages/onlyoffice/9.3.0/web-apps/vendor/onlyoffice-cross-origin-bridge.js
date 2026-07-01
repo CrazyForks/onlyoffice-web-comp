@@ -543,6 +543,12 @@
         setHeader(requestHeaders, name, value);
       };
 
+      this.overrideMimeType = function (mimeType) {
+        if (nativeXhr.overrideMimeType) {
+          nativeXhr.overrideMimeType(mimeType);
+        }
+      };
+
       this.getResponseHeader = function (name) {
         if (!shouldProxyUrl(url)) {
           return nativeXhr.getResponseHeader(name);

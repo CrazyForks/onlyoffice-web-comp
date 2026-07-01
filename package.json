@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack --port 3001",
+    "dev:cdn": "node scripts/static-server.mjs public/packages --port 3010",
     "build": "next build --turbopack",
     "start": "next dev --turbopack"
   },
