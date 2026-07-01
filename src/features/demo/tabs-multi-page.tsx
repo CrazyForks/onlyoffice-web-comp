@@ -18,6 +18,9 @@ import {
   demoTitleClass,
   demoToolbarClass,
 } from "./demo-toolbar";
+import { DocxCommentsCrud } from "./docx-comments-crud";
+import { DocxRevisionsCrud } from "./docx-revisions-crud";
+import { getFileExtension } from "./office-formats";
 import {
   applyDemoResourceMode,
   getDemoResourceState,
@@ -380,6 +383,10 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
       applyDemoResourceMode("cdn", cdnOrigin);
     }, "切换资源失败");
 
+  const isActiveDocx = activeTab
+    ? getFileExtension(activeTab.fileName, activePreset?.fileType) === "docx"
+    : false;
+
   return (
     <div
       className={`flex flex-col bg-neutral-100 ${
@@ -433,6 +440,26 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
                   </DemoSelect>
                 </DemoField>
               </DemoMenuRow>
+              {isActiveDocx && (
+                <>
+                  <DocxCommentsCrud
+                    disabled={loading || !!activeTab?.readOnly}
+                    getManager={ensureActiveManager}
+                    onError={(message, err) => {
+                      setError(message);
+                      console.error(message, err);
+                    }}
+                  />
+                  <DocxRevisionsCrud
+                    disabled={loading || !!activeTab?.readOnly}
+                    getManager={ensureActiveManager}
+                    onError={(message, err) => {
+                      setError(message);
+                      console.error(message, err);
+                    }}
+                  />
+                </>
+              )}
             </DemoMenu>
           </div>
         </div>

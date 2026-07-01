@@ -7,27 +7,31 @@
 ## 批注 API
 
 ```typescript
-import { editorManagerFactory } from "@/components/onlyoffice-web-comp";
+import { OnlyOfficeManager } from "@/components/onlyoffice-web-comp";
 import type {
   CommentInput,
   CommentChangeHandlers,
 } from "@/components/onlyoffice-web-comp";
 
-const manager = editorManagerFactory.getDefault();
+const manager = await OnlyOfficeManager.create({
+  fileType: "docx",
+  defaultFileName: "New Document.docx",
+});
+const editor = manager.getEditor();
 
 // 列表
-const comments = manager.getAllComments();
+const comments = await editor.getAllComments();
 
 // 新增（支持字符串或 CommentData 对象）
-const id = manager.addComment("请修改此处表述");
+const id = editor.addComment("请修改此处表述");
 
 // 更新 / 删除 / 跳转
-manager.updateComment(id, { Text: "已修改说明" });
-manager.removeComment(id);
-manager.goToComment(id, { showBalloon: true });
+editor.updateComment(id, { Text: "已修改说明" });
+editor.removeComment(id);
+editor.goToComment(id, { showBalloon: true });
 
 // 监听批注变化（SDK 回调封装，async）
-const unregister = await manager.registerCommentCallbacks({
+const unregister = await editor.registerCommentCallbacks({
   onAdd: (id, data) => {},
   onChange: (id, data) => {},
   onRemove: (id) => {},
@@ -50,24 +54,25 @@ import type {
   RevisionChangeHandlers,
 } from "@/components/onlyoffice-web-comp";
 
-manager.setTrackRevisions(true);
-const tracking = manager.isTrackRevisions();
-const hasChanges = manager.haveRevisionsChanges();
+editor.setTrackRevisions(true);
+const tracking = editor.isTrackRevisions();
+const hasChanges = editor.haveRevisionsChanges();
 
-const revisions: RevisionItem[] = manager.getAllRevisions();
+const revisions: RevisionItem[] = await editor.getAllRevisions();
+await editor.addDemoRevision("一段用于生成修订的文本");
 
-manager.goToNextRevision();
-manager.goToPrevRevision();
-manager.goToRevision(revisions[0].Id);
+editor.goToNextRevision();
+editor.goToPrevRevision();
+editor.goToRevision(revisions[0].Id);
 
-manager.acceptRevision(revisions[0]);
-manager.rejectRevision(revisions[0]);
-manager.acceptAllRevisions();
-manager.rejectAllRevisions();
-manager.acceptRevisionsBySelection(true);
-manager.rejectRevisionsBySelection(true);
+editor.acceptRevision(revisions[0]);
+editor.rejectRevision(revisions[0]);
+editor.acceptAllRevisions();
+editor.rejectAllRevisions();
+editor.acceptRevisionsBySelection(true);
+editor.rejectRevisionsBySelection(true);
 
-const unregisterRev = await manager.registerRevisionCallbacks({
+const unregisterRev = await editor.registerRevisionCallbacks({
   onShowChanges: (items) => {},
   onTrackRevisionsChange: (enabled) => {},
 });
@@ -84,13 +89,13 @@ unregisterRev();
 
 ### `RevisionData`
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `Type` | `number` | SDK 修订类型枚举值 |
+| 字段       | 类型     | 说明                              |
+| ---------- | -------- | --------------------------------- |
+| `Type`     | `number` | SDK 修订类型枚举值                |
 | `TypeName` | `string` | 如 `TextAdd`、`TextRem`、`ParaPr` |
-| `UserName` | `string` | 修订作者 |
-| `DateTime` | `string` | 修订时间（SDK 格式化字符串） |
-| `Value` | `string` | 修订内容摘要 |
+| `UserName` | `string` | 修订作者                          |
+| `DateTime` | `string` | 修订时间（SDK 格式化字符串）      |
+| `Value`    | `string` | 修订内容摘要                      |
 
 ## `subscribe` — Word SDK 回调
 
@@ -111,14 +116,14 @@ unsubscribe();
 
 ### 推荐回调与业务场景
 
-| 回调 | 场景 |
-|------|------|
-| `asc_onAddComment` | 新增批注后同步侧栏 |
-| `asc_onChangeCommentData` | 批注内容编辑 |
-| `asc_onRemoveComment` | 批注删除 |
-| `asc_onShowRevisionsChange` | 修订列表刷新 |
-| `asc_onDocumentModifiedChanged` | 脏状态、启用保存按钮 |
-| `asc_onSaveCallback` | 与编辑器内部保存链路对齐（一般由组件内部处理） |
+| 回调                            | 场景                                           |
+| ------------------------------- | ---------------------------------------------- |
+| `asc_onAddComment`              | 新增批注后同步侧栏                             |
+| `asc_onChangeCommentData`       | 批注内容编辑                                   |
+| `asc_onRemoveComment`           | 批注删除                                       |
+| `asc_onShowRevisionsChange`     | 修订列表刷新                                   |
+| `asc_onDocumentModifiedChanged` | 脏状态、启用保存按钮                           |
+| `asc_onSaveCallback`            | 与编辑器内部保存链路对齐（一般由组件内部处理） |
 
 完整方法名列表见 `type/word-api.ts`（400+ 项，覆盖内容控件、目录、脚注、合并等高级能力）。
 
@@ -139,6 +144,6 @@ flowchart LR
 ```
 
 - **EventBus**：跨模块、React 层监听，适合 `DOCUMENT_READY`、`LOADING_CHANGE`、带 `binData` 的保存。
-- **subscribe / register*Callbacks**：贴近编辑器内部状态，适合批注、修订、修改标记等 Word 特有行为。
+- **subscribe / register\*Callbacks**：贴近编辑器内部状态，适合批注、修订、修改标记等 Word 特有行为。
 
 两者可同时使用，注意在卸载时分别清理。

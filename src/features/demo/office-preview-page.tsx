@@ -28,7 +28,9 @@ import {
   demoTitleClass,
   demoToolbarClass,
 } from "./demo-toolbar";
-import { OFFICE_UPLOAD_ACCEPT } from "./office-formats";
+import { DocxCommentsCrud } from "./docx-comments-crud";
+import { DocxRevisionsCrud } from "./docx-revisions-crud";
+import { getFileExtension, OFFICE_UPLOAD_ACCEPT } from "./office-formats";
 import {
   applyDemoResourceMode,
   getDemoResourceState,
@@ -267,6 +269,8 @@ export function OfficePreviewPage({
       applyDemoResourceMode("cdn", cdnOrigin);
     }, "切换资源失败");
 
+  const isDocxFile = getFileExtension(activeFileName, fileType) === "docx";
+
   return (
     <div
       className={`flex flex-col bg-white ${
@@ -323,6 +327,26 @@ export function OfficePreviewPage({
                   </DemoSelect>
                 </DemoField>
               </DemoMenuRow>
+              {isDocxFile && (
+                <>
+                  <DocxCommentsCrud
+                    disabled={!editorReady || loading || readOnly}
+                    getManager={() => managerRef.current}
+                    onError={(message, err) => {
+                      setError(message);
+                      console.error(message, err);
+                    }}
+                  />
+                  <DocxRevisionsCrud
+                    disabled={!editorReady || loading || readOnly}
+                    getManager={() => managerRef.current}
+                    onError={(message, err) => {
+                      setError(message);
+                      console.error(message, err);
+                    }}
+                  />
+                </>
+              )}
             </DemoMenu>
           </div>
         </div>

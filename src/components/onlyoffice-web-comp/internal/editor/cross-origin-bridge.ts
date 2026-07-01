@@ -1,6 +1,7 @@
 import type { EditorServer } from "./server";
 import type { MockSocket } from "./socket";
 import type { ScopedIoFactory } from "./install-proxies";
+import { CROSS_ORIGIN_BRIDGE_MESSAGE } from "./cross-origin-protocol";
 
 const BRIDGE_SOURCE = "onlyoffice-bridge";
 
@@ -9,6 +10,10 @@ type BridgeMessage = {
   type?: string;
   frameEditorId?: string;
   requestId?: string;
+  command?: string;
+  payload?: Record<string, unknown>;
+  result?: unknown;
+  error?: string;
   event?: string;
   args?: unknown[];
   method?: string;
@@ -36,6 +41,26 @@ type BridgeSession = {
 };
 
 const sessions = new Map<string, BridgeSession>();
+const pendingRequests = new Map<
+  string,
+  {
+    resolve: (value: unknown) => void;
+    reject: (reason?: unknown) => void;
+    timer: number;
+  }
+>();
+const pendingReadyWaiters = new Map<
+  string,
+  Set<{
+    resolve: (session: BridgeSession) => void;
+    reject: (reason?: unknown) => void;
+    timer: number;
+  }>
+>();
+const editorEventSubscribers = new Map<
+  string,
+  Map<string, Set<(args: unknown[]) => void>>
+>();
 let listenerInstalled = false;
 
 function isBridgeMessage(data: unknown): data is BridgeMessage {
@@ -63,7 +88,10 @@ function postToIframe(
   if (!target) {
     return;
   }
-  target.postMessage({ ...message, source: BRIDGE_SOURCE }, session.targetOrigin);
+  target.postMessage(
+    { ...message, source: BRIDGE_SOURCE },
+    session.targetOrigin,
+  );
 }
 
 function getIframeByWindow(source: MessageEventSource | null) {
@@ -83,7 +111,10 @@ function getIframeByWindow(source: MessageEventSource | null) {
   return null;
 }
 
-function updateSessionIframe(session: BridgeSession, iframe: HTMLIFrameElement) {
+function updateSessionIframe(
+  session: BridgeSession,
+  iframe: HTMLIFrameElement,
+) {
   if (session.iframe === iframe) {
     return;
   }
@@ -125,7 +156,10 @@ function detachSocket(session: BridgeSession) {
   session.handshakeSent = false;
 }
 
-async function handleHttpRequest(session: BridgeSession, message: BridgeMessage) {
+async function handleHttpRequest(
+  session: BridgeSession,
+  message: BridgeMessage,
+) {
   const requestId = message.requestId;
   if (!requestId || !message.url || !message.method) {
     return;
@@ -140,7 +174,9 @@ async function handleHttpRequest(session: BridgeSession, message: BridgeMessage)
       init.body = decodeRequestBody(message);
     }
 
-    let response = await session.server.handleRequest(new Request(message.url, init));
+    let response = await session.server.handleRequest(
+      new Request(message.url, init),
+    );
     if (!response) {
       response = await fetch(message.url, init);
     }
@@ -197,7 +233,9 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-function decodeRequestBody(message: BridgeMessage): BodyInit | null | undefined {
+function decodeRequestBody(
+  message: BridgeMessage,
+): BodyInit | null | undefined {
   if (message.body == null) {
     return null;
   }
@@ -207,12 +245,105 @@ function decodeRequestBody(message: BridgeMessage): BodyInit | null | undefined 
   return message.body;
 }
 
+function describeBridgeState(frameEditorId: string) {
+  const session = sessions.get(frameEditorId);
+  if (!session) {
+    return `OnlyOffice cross-origin bridge is not ready for ${frameEditorId}: session is not registered`;
+  }
+
+  return `OnlyOffice cross-origin bridge is not ready for ${frameEditorId}: iframe=${session.iframe.src || "(empty)"}`;
+}
+
+function resolveReadyWaiters(frameEditorId: string, session: BridgeSession) {
+  const waiters = pendingReadyWaiters.get(frameEditorId);
+  if (!waiters) {
+    return;
+  }
+
+  pendingReadyWaiters.delete(frameEditorId);
+  waiters.forEach((waiter) => {
+    window.clearTimeout(waiter.timer);
+    waiter.resolve(session);
+  });
+}
+
+function rejectReadyWaiters(frameEditorId: string, error: Error) {
+  const waiters = pendingReadyWaiters.get(frameEditorId);
+  if (!waiters) {
+    return;
+  }
+
+  pendingReadyWaiters.delete(frameEditorId);
+  waiters.forEach((waiter) => {
+    window.clearTimeout(waiter.timer);
+    waiter.reject(error);
+  });
+}
+
+function waitForBridgeReady(frameEditorId: string, timeout: number) {
+  const session = sessions.get(frameEditorId);
+  if (session?.bridgeReady) {
+    return Promise.resolve(session);
+  }
+
+  return new Promise<BridgeSession>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      const waiters = pendingReadyWaiters.get(frameEditorId);
+      waiters?.delete(waiter);
+      if (waiters?.size === 0) {
+        pendingReadyWaiters.delete(frameEditorId);
+      }
+      reject(new Error(describeBridgeState(frameEditorId)));
+    }, timeout);
+    const waiter = { resolve, reject, timer };
+
+    let waiters = pendingReadyWaiters.get(frameEditorId);
+    if (!waiters) {
+      waiters = new Set();
+      pendingReadyWaiters.set(frameEditorId, waiters);
+    }
+    waiters.add(waiter);
+  });
+}
+
 function handleBridgeMessage(event: MessageEvent) {
   if (!isBridgeMessage(event.data)) {
     return;
   }
 
   const message = event.data;
+  if (
+    message.type === CROSS_ORIGIN_BRIDGE_MESSAGE.EDITOR_RESPONSE &&
+    message.requestId
+  ) {
+    const pending = pendingRequests.get(message.requestId);
+    if (pending) {
+      window.clearTimeout(pending.timer);
+      pendingRequests.delete(message.requestId);
+      if (message.error) {
+        pending.reject(new Error(message.error));
+      } else {
+        pending.resolve(message.result);
+      }
+    }
+    return;
+  }
+
+  if (
+    message.type === CROSS_ORIGIN_BRIDGE_MESSAGE.EDITOR_EVENT &&
+    message.event
+  ) {
+    const frameEditorId = message.frameEditorId;
+    const frameSubscribers = frameEditorId
+      ? editorEventSubscribers.get(frameEditorId)
+      : undefined;
+    const subscribers = frameSubscribers?.get(message.event);
+    subscribers?.forEach((handler) => {
+      handler(message.args ?? []);
+    });
+    return;
+  }
+
   const frameEditorId = message.frameEditorId;
   if (!frameEditorId) {
     return;
@@ -231,16 +362,13 @@ function handleBridgeMessage(event: MessageEvent) {
   switch (message.type) {
     case "hello": {
       session.bridgeReady = true;
+      resolveReadyWaiters(frameEditorId, session);
       attachSocket(session);
       const targetWindow =
         event.source && "postMessage" in event.source
           ? (event.source as Window)
           : undefined;
-      postToIframe(
-        session,
-        { type: "hello:ack", frameEditorId },
-        targetWindow,
-      );
+      postToIframe(session, { type: "hello:ack", frameEditorId }, targetWindow);
       if (!session.handshakeSent) {
         session.handshakeSent = true;
         setTimeout(() => {
@@ -251,7 +379,7 @@ function handleBridgeMessage(event: MessageEvent) {
       }
       if (session.pendingReadOnly !== null) {
         postToIframe(session, {
-          type: "editor:set-readonly",
+          type: CROSS_ORIGIN_BRIDGE_MESSAGE.EDITOR_SET_READONLY,
           frameEditorId,
           readOnly: session.pendingReadOnly,
         });
@@ -263,10 +391,9 @@ function handleBridgeMessage(event: MessageEvent) {
       if (!session.socket || !message.event) {
         break;
       }
-      (session.socket as { emit: (event: string, ...args: unknown[]) => void }).emit(
-        message.event,
-        ...(message.args ?? []),
-      );
+      (
+        session.socket as { emit: (event: string, ...args: unknown[]) => void }
+      ).emit(message.event, ...(message.args ?? []));
       break;
     }
     case "http": {
@@ -315,7 +442,14 @@ export function unregisterCrossOriginBridge(frameEditorId: string) {
   if (session) {
     detachSocket(session);
     sessions.delete(frameEditorId);
+    rejectReadyWaiters(
+      frameEditorId,
+      new Error(
+        `OnlyOffice cross-origin bridge was unregistered: ${frameEditorId}`,
+      ),
+    );
   }
+  editorEventSubscribers.delete(frameEditorId);
 }
 
 export function setCrossOriginReadOnly(
@@ -333,7 +467,7 @@ export function setCrossOriginReadOnly(
   }
 
   postToIframe(session, {
-    type: "editor:set-readonly",
+    type: CROSS_ORIGIN_BRIDGE_MESSAGE.EDITOR_SET_READONLY,
     frameEditorId,
     readOnly,
   });
@@ -341,7 +475,71 @@ export function setCrossOriginReadOnly(
   return true;
 }
 
-export function canAccessIframeWindow(iframe: HTMLIFrameElement | null | undefined) {
+export function callCrossOriginEditor(
+  frameEditorId: string,
+  command: string,
+  payload: Record<string, unknown> = {},
+  timeout = 5000,
+) {
+  const requestId = `editor-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}`;
+
+  return waitForBridgeReady(frameEditorId, timeout).then(
+    (session) =>
+      new Promise<unknown>((resolve, reject) => {
+        const timer = window.setTimeout(() => {
+          pendingRequests.delete(requestId);
+          reject(
+            new Error(`OnlyOffice cross-origin command timed out: ${command}`),
+          );
+        }, timeout);
+
+        pendingRequests.set(requestId, { resolve, reject, timer });
+        postToIframe(session, {
+          type: CROSS_ORIGIN_BRIDGE_MESSAGE.EDITOR_COMMAND,
+          frameEditorId,
+          requestId,
+          command,
+          payload,
+        });
+      }),
+  );
+}
+
+export function subscribeCrossOriginEditorEvent(
+  frameEditorId: string,
+  event: string,
+  handler: (args: unknown[]) => void,
+) {
+  let frameSubscribers = editorEventSubscribers.get(frameEditorId);
+  if (!frameSubscribers) {
+    frameSubscribers = new Map();
+    editorEventSubscribers.set(frameEditorId, frameSubscribers);
+  }
+
+  let subscribers = frameSubscribers.get(event);
+  if (!subscribers) {
+    subscribers = new Set();
+    frameSubscribers.set(event, subscribers);
+  }
+
+  subscribers.add(handler);
+
+  return () => {
+    subscribers?.delete(handler);
+    if (subscribers?.size === 0) {
+      frameSubscribers?.delete(event);
+    }
+    if (frameSubscribers?.size === 0) {
+      editorEventSubscribers.delete(frameEditorId);
+    }
+  };
+}
+
+export function canAccessIframeWindow(
+  iframe: HTMLIFrameElement | null | undefined,
+) {
   if (!iframe) {
     return false;
   }

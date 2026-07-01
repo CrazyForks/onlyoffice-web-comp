@@ -28,10 +28,7 @@ import { downloadBlob } from "../util/download";
 import { initializeOnlyOffice } from "../util/initialize";
 import { convertBinToDocument } from "../util/x2t";
 import type { User } from "../internal/editor/types";
-import {
-  EditorManager,
-  editorManagerFactory,
-} from "./editor-manager";
+import { EditorManager, editorManagerFactory } from "./editor-manager";
 import { onlyofficeEventbus, type LoadingChangeData } from "./eventbus";
 
 export type OnlyOfficeManagerOptions = {
