@@ -19,8 +19,10 @@ import {
   extensionFromOutputFormat,
   ensureTitleWithExtension,
   isCanvasBinOutputFormat,
+  normalizeX2tExportFileType,
 } from "./utils";
 import { getOnlyOfficeMimeType } from "../../util/document-file";
+import { isOnlyOfficeCdnMode } from "../../const";
 import { allPlugins, featuredPlugins, getPluginsData } from "./plugins";
 
 /**
@@ -181,6 +183,41 @@ function getUrl(data: Uint8Array, type?: string) {
   return URL.createObjectURL(blob);
 }
 
+/** Response 头值须为 ISO-8859-1；中文文件名放在 filename*=UTF-8 段。 */
+function buildContentDisposition(fileName: string): string {
+  const encoded = encodeURIComponent(fileName).replace(/['()]/g, escape);
+  const ascii = fileName.replace(/[^\x20-\x7E]/g, "_").replace(/"/g, '\\"');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+}
+
+function getCacheDownloadName(
+  outputName: string,
+  title: string,
+  filetype: string,
+  downloadFileNames: Map<string, string>,
+) {
+  const stored = downloadFileNames.get(outputName);
+  if (stored) {
+    return stored;
+  }
+  if (outputName === "Editor.bin" || outputName.startsWith("output.")) {
+    return ensureTitleWithExtension(title, filetype);
+  }
+  return outputName.split("/").pop() || outputName;
+}
+
+function getCacheResponseMimeType(name: string, fallbackFileType: string) {
+  if (name.startsWith("media/")) {
+    return detectImageMimeForName(name);
+  }
+
+  const filetype = getFileExt(name.replace(/^output\./, "")) || fallbackFileType;
+  if (name === "Editor.bin") {
+    return "application/octet-stream";
+  }
+  return getOnlyOfficeMimeType(filetype);
+}
+
 function getDataUrl(data: Uint8Array, mimeType = "application/octet-stream") {
   let binary = "";
   const chunkSize = 0x8000;
@@ -205,6 +242,34 @@ function parseClipboardImage(input: string) {
 
   const subtype = mime.split("/")[1]?.split("+")[0] || "png";
   const ext = subtype === "jpeg" ? "jpg" : subtype;
+  return { data, mime, ext };
+}
+
+async function fetchClipboardImage(input: string) {
+  let url: URL;
+  try {
+    url = new URL(input, window.location.href);
+  } catch {
+    return null;
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return null;
+  }
+
+  const response = await fetch(url.href);
+  if (!response.ok) {
+    return null;
+  }
+
+  const data = new Uint8Array(await response.arrayBuffer());
+  const headerMime = response.headers.get("Content-Type")?.split(";")[0] ?? "";
+  const mime = headerMime.startsWith("image/") ? headerMime : detectImageMime(data);
+  if (!mime.startsWith("image/")) {
+    return null;
+  }
+
+  const ext = getFileExt(url.pathname) || getImageExt(mime);
   return { data, mime, ext };
 }
 
@@ -243,6 +308,21 @@ function detectImageMime(data: Uint8Array) {
     return "image/webp";
   }
   return "image/png";
+}
+
+function detectImageMimeForName(name: string) {
+  switch (getFileExt(name)) {
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "gif":
+      return "image/gif";
+    case "webp":
+      return "image/webp";
+    case "png":
+    default:
+      return "image/png";
+  }
 }
 
 function getImageExt(mime: string) {
@@ -301,6 +381,20 @@ export class EditorServer {
     this.options = options;
     this.handleConnect = this.handleConnect.bind(this);
     this.handleMessage = this.handleMessage.bind(this);
+  }
+
+  /** CDN iframe 与主站跨域：Editor.bin 必须用相对 /cache/files/，由 bridge 代拉。 */
+  private getCacheFileUrl(name: string) {
+    return `/cache/files/data/${this.id}/${name}`;
+  }
+
+  private setEditorBinUrl(data: Uint8Array) {
+    this.fsMap.set("Editor.bin", data);
+    if (typeof window !== "undefined" && isOnlyOfficeCdnMode()) {
+      this.urlsMap.set("Editor.bin", this.getCacheFileUrl("Editor.bin"));
+      return;
+    }
+    this.urlsMap.set("Editor.bin", getUrl(data));
   }
 
   reset() {
@@ -388,7 +482,7 @@ export class EditorServer {
     }
 
     this.fsMap.set("Editor.bin", binData);
-    this.urlsMap.set("Editor.bin", getUrl(binData));
+    this.setEditorBinUrl(binData);
 
     return {
       id: this.id,
@@ -431,7 +525,7 @@ export class EditorServer {
       fileType: this.fileType,
       key: this.id,
       title: this.title,
-      url: "/" + this.id,
+      url: this.urlsMap.get("Editor.bin") || this.getCacheFileUrl("Editor.bin"),
     };
   }
 
@@ -568,7 +662,7 @@ export class EditorServer {
       this.urlsMap.forEach((url) => URL.revokeObjectURL(url));
     }
     this.fsMap.set("Editor.bin", output);
-    this.urlsMap.set("Editor.bin", getUrl(output));
+    this.setEditorBinUrl(output);
     for (const name in media) {
       this.addMedia(name, media[name]);
     }
@@ -620,16 +714,14 @@ export class EditorServer {
 
   private addMedia(name: string, data: Uint8Array, mimeType?: string) {
     const pathname = "media/" + name;
-    const mime = mimeType || detectImageMime(data);
-    const url = getDataUrl(data, mime);
     this.fsMap.set(pathname, data);
+    const url = getDataUrl(data, mimeType || detectImageMime(data));
     this.urlsMap.set(pathname, url);
     return url;
   }
 
   private updateEditorBin(data: Uint8Array) {
-    this.fsMap.set("Editor.bin", data);
-    this.urlsMap.set("Editor.bin", getUrl(data));
+    this.setEditorBinUrl(data);
   }
 
   /** 与 Document Server 一致：/cache/files/data/{id}/output.{ext}（站点根绝对路径，便于 iframe 代理命中） */
@@ -808,11 +900,11 @@ export class EditorServer {
       typeof cmd?.outputformat === "number" ? cmd.outputformat : undefined,
     );
     if (fromOutput) {
-      return fromOutput;
+      return normalizeX2tExportFileType(fromOutput);
     }
 
     const title = typeof cmd?.title === "string" ? cmd.title : "";
-    return getFileExt(title) || this.fileType;
+    return normalizeX2tExportFileType(getFileExt(title) || this.fileType);
   }
 
   private resolveDownloadFileName(
@@ -853,12 +945,22 @@ export class EditorServer {
     };
   }
 
-  handleConnect({ socket }: { socket: MockSocket }) {
-    console.log("connect: ", socket);
+  registerSocketTransport(socket: MockSocket) {
+    if (this.sockets.has(socket)) {
+      return;
+    }
 
     this.sockets.add(socket);
-    const { sessionId, client } = this;
 
+    const handler = (msg: unknown, ...args: unknown[]) => {
+      void this.handleMessage(socket, msg as Record<string, unknown>, ...args);
+    };
+    this.messageHandlers.set(socket, handler);
+    socket.server.on("message", handler);
+  }
+
+  sendCoAuthoringHandshake(socket: MockSocket) {
+    const { sessionId, client } = this;
     const readOnly = this.options.getState?.()?.readOnly ?? false;
 
     this.participants = [
@@ -874,12 +976,6 @@ export class EditorServer {
         view: readOnly,
       },
     ];
-
-    const handler = (msg: unknown, ...args: unknown[]) => {
-      void this.handleMessage(socket, msg as Record<string, unknown>, ...args);
-    };
-    this.messageHandlers.set(socket, handler);
-    socket.server.on("message", handler);
 
     this.sendTo(socket, {
       maxPayload: 100000000,
@@ -908,6 +1004,12 @@ export class EditorServer {
     });
   }
 
+  handleConnect({ socket }: { socket: MockSocket }) {
+    console.log("connect: ", socket);
+    this.registerSocketTransport(socket);
+    this.sendCoAuthoringHandshake(socket);
+  }
+
   handleDisconnect({ socket }: { socket: MockSocket }) {
     console.log("disconnect: ", socket);
 
@@ -919,7 +1021,7 @@ export class EditorServer {
     this.sockets.delete(socket);
   }
 
-  private handleImgUrls(
+  private async handleImgUrls(
     socket: MockSocket,
     message: Record<string, unknown>,
   ) {
@@ -933,7 +1035,14 @@ export class EditorServer {
         continue;
       }
 
-      const parsed = parseClipboardImage(item);
+      let parsed = parseClipboardImage(item);
+      if (!parsed) {
+        try {
+          parsed = await fetchClipboardImage(item);
+        } catch (err) {
+          console.warn("[EditorServer] failed to fetch image url:", item, err);
+        }
+      }
       if (!parsed) {
         continue;
       }
@@ -1077,7 +1186,7 @@ export class EditorServer {
       case "openDocument": {
         const message = (msg as { message?: Record<string, unknown> }).message;
         if (message?.c === "imgurls") {
-          this.handleImgUrls(socket, message);
+          void this.handleImgUrls(socket, message);
         }
         break;
       }
@@ -1101,26 +1210,29 @@ export class EditorServer {
     if (cacheMatch && req.method === "GET") {
       const [, , rawName] = cacheMatch;
       const outputName = decodeURIComponent(rawName.split("?")[0]);
+      if (!this.fsMap.has(outputName) && this.loadPromise) {
+        await this.loadPromise;
+      }
+
       const data = this.fsMap.get(outputName);
       if (!data) {
         return new Response("Not Found", { status: 404 });
       }
 
-      const filetype = getFileExt(outputName.replace(/^output\./, ""));
-      const downloadName =
-        this.downloadFileNames.get(outputName) ||
-        ensureTitleWithExtension(this.title, filetype);
-      const mimeType = getOnlyOfficeMimeType(filetype);
-      const encodedName = encodeURIComponent(downloadName).replace(
-        /['()]/g,
-        escape,
+      const filetype = getFileExt(outputName.replace(/^output\./, "")) || this.fileType;
+      const downloadName = getCacheDownloadName(
+        outputName,
+        this.title,
+        filetype,
+        this.downloadFileNames,
       );
+      const mimeType = getCacheResponseMimeType(outputName, this.fileType);
 
       return new Response(data as Uint8Array<ArrayBuffer>, {
         status: 200,
         headers: {
           "Content-Type": mimeType,
-          "Content-Disposition": `attachment; filename="${downloadName.replace(/"/g, '\\"')}"; filename*=UTF-8''${encodedName}`,
+          "Content-Disposition": buildContentDisposition(downloadName),
           "Content-Length": String(data.byteLength),
         },
       });

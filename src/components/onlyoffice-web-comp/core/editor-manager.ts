@@ -1,9 +1,18 @@
 import {
   installOnlyOfficeProxies,
   installReporterWindowHook,
+  registerScopedIo,
+  unregisterScopedIo,
   type OnlyOfficeProxyWindow,
   type ReporterHookWindow,
+  type ScopedIoFactory,
 } from "../internal/editor/install-proxies";
+import {
+  canAccessIframeWindow,
+  setCrossOriginReadOnly,
+  unregisterCrossOriginBridge,
+  watchCrossOriginIframe,
+} from "../internal/editor/cross-origin-bridge";
 import { EditorServer } from "../internal/editor/server";
 import io, { MockSocket, type MockSocketOptions } from "../internal/editor/socket";
 import {
@@ -13,7 +22,7 @@ import {
   type PluginMode,
   type User,
 } from "../internal/editor/types";
-import { getDocumentType } from "../const";
+import { getDocumentType, isOnlyOfficeCdnMode } from "../const";
 import type { AscWordApiCallback, AscWordApiMethod } from "../type/word-api";
 import {
   type OnlyOfficeIframeWindow,
@@ -129,8 +138,6 @@ type OnlyOfficeWindow = OnlyOfficeIframeWindow & {
   };
 };
 
-type ScopedIoFactory = (url?: string, options?: MockSocketOptions) => MockSocket;
-
 type ShellMainController = {
   mode?: { isEdit?: boolean; canEdit?: boolean };
 };
@@ -138,10 +145,6 @@ type ShellMainController = {
 type WordHeaderView = {
   btnDocMode?: { setVisible?: (visible: boolean) => void };
   btnPDFMode?: { setVisible?: (visible: boolean) => void };
-};
-
-type OnlyOfficeParentWindow = Window & {
-  __ONLYOFFICE_SCOPED_IO__?: Record<string, ScopedIoFactory>;
 };
 
 export class EditorManager {
@@ -163,6 +166,7 @@ export class EditorManager {
   private revisionReviewMode = false;
   private wordContentSyncPromise: Promise<void> | null = null;
   private wordContentSyncTeardown: (() => void) | null = null;
+  private crossOriginBridgeTeardown: (() => void) | null = null;
 
   constructor(containerId = ONLYOFFICE_ID) {
     this.containerId = containerId;
@@ -189,6 +193,47 @@ export class EditorManager {
 
       return socket;
     };
+  }
+
+  private createCrossOriginServerIo(): ScopedIoFactory {
+    return () => {
+      const socket = io(undefined, { deferConnect: true });
+      socket.connected = true;
+      socket.disconnected = false;
+      return socket;
+    };
+  }
+
+  private syncEditorBridge() {
+    this.crossOriginBridgeTeardown?.();
+    this.crossOriginBridgeTeardown = null;
+    unregisterScopedIo(this.containerId);
+
+    registerScopedIo(this.containerId, this.createScopedIo());
+    if (!isOnlyOfficeCdnMode()) {
+      return;
+    }
+
+    this.crossOriginBridgeTeardown = watchCrossOriginIframe(
+      this.containerId,
+      () => this.getEditorFrameElement(),
+      this.server,
+      this.createCrossOriginServerIo(),
+    );
+  }
+
+  private syncCrossOriginReadOnly(readOnly: boolean, retries = 10) {
+    if (setCrossOriginReadOnly(this.containerId, readOnly)) {
+      return true;
+    }
+
+    if (retries > 0) {
+      window.setTimeout(() => {
+        this.syncCrossOriginReadOnly(readOnly, retries - 1);
+      }, 50);
+    }
+
+    return false;
   }
 
   private getEditorFrameElement() {
@@ -228,7 +273,9 @@ export class EditorManager {
   }
 
   private installProxiesOnWindow(win: OnlyOfficeProxyWindow) {
-    installOnlyOfficeProxies(win, this.server, this.createScopedIo());
+    installOnlyOfficeProxies(win, this.server, this.createScopedIo(), {
+      installIo: false,
+    });
   }
 
   /**
@@ -237,10 +284,18 @@ export class EditorManager {
    */
   private installIframeProxies() {
     const iframe = this.getEditorFrameElement();
-    const win = iframe?.contentWindow as
+    if (!iframe) {
+      throw new Error("Iframe not loaded");
+    }
+
+    if (!canAccessIframeWindow(iframe)) {
+      return;
+    }
+
+    const win = iframe.contentWindow as
       | (OnlyOfficeWindow & ReporterHookWindow)
       | undefined;
-    const iframeDoc = iframe?.contentDocument;
+    const iframeDoc = iframe.contentDocument;
 
     if (!iframeDoc || !win) {
       throw new Error("Iframe not loaded");
@@ -260,7 +315,11 @@ export class EditorManager {
   private getEditorFrameWindow() {
     const iframe = this.getEditorFrameElement();
 
-    return iframe?.contentWindow as OnlyOfficeWindow | undefined;
+    if (!iframe || !canAccessIframeWindow(iframe)) {
+      return undefined;
+    }
+
+    return iframe.contentWindow as OnlyOfficeWindow | undefined;
   }
 
   private getSdkApi() {
@@ -907,8 +966,14 @@ export class EditorManager {
    * 初始只读与运行时切只读走同一套 asc_setRestriction。
    * 挂载阶段若 permissions.edit=false，xlsx 等会在打开时样式/格式异常；
    * 因此挂载时保持完整编辑权限，documentReady 后再施加只读限制。
+   * CDN 跨域模式通过 iframe 内 bridge 执行同样的 SDK/UI 同步，避免跨域访问 window.Asc。
    */
   private applyInitialReadOnlyState(documentType: DocumentType) {
+    if (isOnlyOfficeCdnMode()) {
+      this.syncCrossOriginReadOnly(this.readOnly);
+      return;
+    }
+
     this.installSlideStructureEditBlocker();
     this.syncEditingRights(false);
 
@@ -1023,6 +1088,12 @@ export class EditorManager {
     }
 
     const documentType = getDocumentType(this.fileType);
+
+    if (isOnlyOfficeCdnMode()) {
+      this.syncCrossOriginReadOnly(!editing);
+      return;
+    }
+
     const sdk = this.getRestrictionSdkApi();
 
     if (sdk?.asc_setRestriction) {
@@ -1168,6 +1239,7 @@ export class EditorManager {
     this.editorLang = (options.lang as OnlyOfficeLang | undefined) || getOnlyOfficeLang();
     this.uiTheme = options.theme || "theme-white";
 
+    this.syncEditorBridge();
     this.mountDocEditor();
 
     return this;
@@ -1219,6 +1291,11 @@ export class EditorManager {
       }
 
       this.readOnly = readOnly;
+      if (isOnlyOfficeCdnMode()) {
+        this.syncCrossOriginReadOnly(readOnly);
+        return;
+      }
+
       this.installSlideStructureEditBlocker();
       this.syncEditingRights(!readOnly);
     } finally {
@@ -1646,6 +1723,10 @@ export class EditorManager {
     }
     this.pendingUserSaveSnapshot = null;
     this.teardownWordContentSync();
+    this.crossOriginBridgeTeardown?.();
+    this.crossOriginBridgeTeardown = null;
+    unregisterScopedIo(this.containerId);
+    unregisterCrossOriginBridge(this.containerId);
     this.editor?.destroyEditor?.();
     this.editor = null;
     this.dirty = false;

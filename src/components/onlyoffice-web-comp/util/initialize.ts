@@ -1,6 +1,32 @@
 import { STATIC_RESOURCE } from "../const";
 
 let initializePromise: Promise<void> | null = null;
+let initializeApiUrl = "";
+
+type DocsApiWindow = Window & {
+  DocsAPI?: unknown;
+};
+
+function resetLoadedDocsApi(apiUrl: string) {
+  if (!initializeApiUrl || initializeApiUrl === apiUrl) {
+    return;
+  }
+
+  document
+    .querySelectorAll<HTMLScriptElement>(
+      'script[src*="/web-apps/apps/api/documents/api.js"]',
+    )
+    .forEach((script) => script.remove());
+  document
+    .querySelectorAll<HTMLIFrameElement>("iframe[data-onlyoffice-preload]")
+    .forEach((iframe) => iframe.remove());
+
+  try {
+    delete (window as DocsApiWindow).DocsAPI;
+  } catch {
+    (window as DocsApiWindow).DocsAPI = undefined;
+  }
+}
 
 function preloadEditorFrame() {
   if (document.querySelector(`iframe[data-onlyoffice-preload="${STATIC_RESOURCE.onlyoffice.preloadHtml}"]`)) {
@@ -17,9 +43,17 @@ function preloadEditorFrame() {
 export async function initializeOnlyOffice() {
   if (typeof window === "undefined") return;
 
-  if (initializePromise) {
+  const apiUrl = STATIC_RESOURCE.onlyoffice.apiUrl;
+
+  if (initializePromise && initializeApiUrl === apiUrl) {
     return initializePromise;
   }
+
+  if (initializePromise && initializeApiUrl !== apiUrl) {
+    initializePromise = null;
+  }
+  resetLoadedDocsApi(apiUrl);
+  initializeApiUrl = apiUrl;
 
   initializePromise = new Promise<void>((resolve, reject) => {
     preloadEditorFrame();
@@ -29,7 +63,6 @@ export async function initializeOnlyOffice() {
       return;
     }
 
-    const apiUrl = STATIC_RESOURCE.onlyoffice.apiUrl;
     let script = document.querySelector<HTMLScriptElement>(
       `script[src="${apiUrl}"]`,
     );

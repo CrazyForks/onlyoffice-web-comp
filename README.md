@@ -109,6 +109,38 @@ pnpm build
 
 Deploy to Vercel or any static host. Live demo: https://onlyoffice-web-comp.vercel.app/
 
+### Deploy SDK Assets to Cloudflare Pages CDN
+
+OnlyOffice SDK assets can be hosted separately from the app. Deploy the contents of `public/packages` to Cloudflare Pages, then register the Pages URL before creating an editor.
+
+```bash
+# one-time project creation
+npx wrangler pages project create onlyoffice-packages
+
+# upload public/packages as the CDN root
+npx wrangler pages deploy public/packages \
+  --project-name onlyoffice-packages \
+  --commit-dirty=true
+```
+
+After deployment, the asset URL should look like:
+
+```text
+https://<project>.pages.dev/onlyoffice/9.3.0/web-apps/apps/api/documents/api.js
+```
+
+Use that Pages origin as the runtime resource root:
+
+```typescript
+import { OnlyOfficeManager } from "@/components/onlyoffice-web-comp";
+
+OnlyOfficeManager.registerStaticResource({
+  cdnOrigin: "https://<project>.pages.dev",
+});
+```
+
+`cdnOrigin` points to the uploaded `public/packages` root, so do not append `/packages`. Cloudflare Pages Direct Upload supports Wrangler folder uploads; dashboard drag-and-drop is less suitable for this repository because the SDK contains many files.
+
 ## Fonts
 
 Custom fonts are registered via **`__custom_font_registry__`**, with **`ttf-to-catalog-font.mjs`** producing OnlyOffice catalog wire-format files. See **[10 - Fonts](src/components/onlyoffice-web-comp/docs/10-字体配置.md)** in the component docs for the full guide.

@@ -75,7 +75,7 @@ export const OFFICE_EDITOR_LOGO = {
 
 // ── 静态资源（SDK / x2t）────────────────────────────────────────
 
-type StaticResource = {
+export type StaticResource = {
   /** 版本目录：升级资源时只改这里 */
   version: {
     onlyofficeSdk: string;
@@ -98,6 +98,11 @@ type StaticResource = {
       default: string;
     };
   };
+};
+
+export type OnlyOfficeStaticResourceOptions = {
+  /** CDN packages 根地址，例如 https://65fffaff.onlyoffice-packages.pages.dev。 */
+  cdnOrigin?: string | null;
 };
 
 /** @deprecated 使用 X2T_PDF_FONT_MANIFEST[0].file */
@@ -156,25 +161,38 @@ export const X2T_PDF_FONT_MANIFEST = [
   },
 ] as const;
 
-function createStaticResource(): StaticResource {
-  const onlyofficeSdkRoot = "/packages/onlyoffice/9.3.0";
-  /** x2t 与 SDK 同版本目录；磁盘上为 Brotli 预压缩，由 x2t.worker 内 fetch-brotli 自动解压 */
-  const x2tRoot = `${onlyofficeSdkRoot}/x2t`;
-  const x2tPdfFontsRoot = `${onlyofficeSdkRoot}/x2t-fonts`;
+const DEFAULT_ONLYOFFICE_VERSION = "9.3.0";
+const DEFAULT_ONLYOFFICE_ROOT = `/packages/onlyoffice/${DEFAULT_ONLYOFFICE_VERSION}`;
+
+let staticResourceOptions: OnlyOfficeStaticResourceOptions | null = null;
+
+function trimTrailingSlash(value: string) {
+  return value.replace(/\/+$/, "");
+}
+
+function buildStaticResource(): StaticResource {
   const apiJs = "/web-apps/apps/api/documents/api.js";
   const preloadHtml = "/web-apps/apps/api/documents/preload.html";
+  const cdnOrigin = staticResourceOptions?.cdnOrigin
+    ? trimTrailingSlash(staticResourceOptions.cdnOrigin)
+    : "";
+  const onlyofficeRoot = cdnOrigin
+    ? `${cdnOrigin}/onlyoffice/${DEFAULT_ONLYOFFICE_VERSION}`
+    : DEFAULT_ONLYOFFICE_ROOT;
+  const x2tRoot = `${onlyofficeRoot}/x2t`;
+  const x2tPdfFontsRoot = `${onlyofficeRoot}/x2t-fonts`;
 
   return {
     version: {
-      onlyofficeSdk: onlyofficeSdkRoot,
+      onlyofficeSdk: onlyofficeRoot,
       x2t: x2tRoot,
     },
     onlyoffice: {
-      root: onlyofficeSdkRoot,
+      root: onlyofficeRoot,
       apiJs,
       preloadHtml,
-      apiUrl: onlyofficeSdkRoot + apiJs,
-      preloadUrl: onlyofficeSdkRoot + preloadHtml,
+      apiUrl: onlyofficeRoot + apiJs,
+      preloadUrl: onlyofficeRoot + preloadHtml,
     },
     x2t: {
       root: x2tRoot,
@@ -188,27 +206,88 @@ function createStaticResource(): StaticResource {
   };
 }
 
-/**
- * 静态资源路径总入口。
- * 升级 OnlyOffice SDK → 改 `version.onlyofficeSdk`（或 env `NEXT_PUBLIC_APP_ROOT`）
- * 升级 x2t WASM     → 改 `version.x2t`（Brotli 解压见 internal/editor/fetch-brotli.ts）
- */
-export const STATIC_RESOURCE = createStaticResource();
+let staticResourceCache: StaticResource | null = null;
+
+/** 运行时注册 OnlyOffice 静态资源地址；须在首次初始化 DocsAPI / x2t 前调用。 */
+export function registerOnlyOfficeStaticResource(
+  options: OnlyOfficeStaticResourceOptions,
+): StaticResource {
+  staticResourceOptions = { ...options };
+  staticResourceCache = null;
+  return getStaticResource();
+}
+
+/** 清空运行时注册地址，恢复默认静态资源地址。 */
+export function resetOnlyOfficeStaticResource(): StaticResource {
+  staticResourceOptions = null;
+  staticResourceCache = null;
+  return getStaticResource();
+}
+
+/** 延迟构建，支持主实例初始化前运行时注册资源地址。 */
+export function getStaticResource(): StaticResource {
+  if (!staticResourceCache) {
+    staticResourceCache = buildStaticResource();
+  }
+  return staticResourceCache;
+}
+
+/** 静态资源走外部 CDN（iframe 与主站跨域）。 */
+export function isOnlyOfficeCdnMode(): boolean {
+  const root = getStaticResource().onlyoffice.root;
+  if (!/^https?:\/\//i.test(root) || typeof window === "undefined") {
+    return false;
+  }
+  try {
+    return new URL(root).origin !== window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+/** 延迟读取，避免 Worker / SSR 在模块加载时固定资源地址。 */
+export const STATIC_RESOURCE = {
+  get version() {
+    return getStaticResource().version;
+  },
+  get onlyoffice() {
+    return getStaticResource().onlyoffice;
+  },
+  get x2t() {
+    return getStaticResource().x2t;
+  },
+} as StaticResource;
 
 /** @deprecated 使用 STATIC_RESOURCE.onlyoffice */
 export const ONLYOFFICE_RESOURCE = {
-  APP_ROOT: STATIC_RESOURCE.onlyoffice.root,
-  API_JS: STATIC_RESOURCE.onlyoffice.apiJs,
-  PRELOAD_HTML: STATIC_RESOURCE.onlyoffice.preloadHtml,
-  API_URL: STATIC_RESOURCE.onlyoffice.apiUrl,
-  PRELOAD_URL: STATIC_RESOURCE.onlyoffice.preloadUrl,
+  get APP_ROOT() {
+    return getStaticResource().onlyoffice.root;
+  },
+  get API_JS() {
+    return getStaticResource().onlyoffice.apiJs;
+  },
+  get PRELOAD_HTML() {
+    return getStaticResource().onlyoffice.preloadHtml;
+  },
+  get API_URL() {
+    return getStaticResource().onlyoffice.apiUrl;
+  },
+  get PRELOAD_URL() {
+    return getStaticResource().onlyoffice.preloadUrl;
+  },
 } as const;
 
 /** @deprecated 使用 STATIC_RESOURCE.x2t */
 export const X2T_RESOURCE = {
-  ROOT: STATIC_RESOURCE.x2t.root,
-  SCRIPT: STATIC_RESOURCE.x2t.script,
-  WASM: STATIC_RESOURCE.x2t.wasm,
+  get ROOT() {
+    return getStaticResource().x2t.root;
+  },
+  get SCRIPT() {
+    return getStaticResource().x2t.script;
+  },
+  get WASM() {
+    return getStaticResource().x2t.wasm;
+  },
 } as const;
 
 /** 站点相对路径 → 绝对 URL（Worker 内 origin 用 self.location.origin） */
@@ -220,7 +299,7 @@ export function resolveSiteUrl(origin: string, path: string): string {
 }
 
 export function getX2tBaseUrl(origin: string): string {
-  return resolveSiteUrl(origin, `${STATIC_RESOURCE.x2t.root}/`);
+  return resolveSiteUrl(origin, `${getStaticResource().x2t.root}/`);
 }
 
 // ── 文档类型 ────────────────────────────────────────────────────

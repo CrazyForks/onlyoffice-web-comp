@@ -44,7 +44,7 @@ export function DemoField({ label, children, className = "" }: DemoFieldProps) {
     <label
       className={`inline-flex h-8 items-center gap-1.5 border border-neutral-300 bg-white px-2 text-[13px] text-neutral-600 ${className}`}
     >
-      <span className="select-none">{label}</span>
+      <span className="shrink-0 select-none whitespace-nowrap">{label}</span>
       {children}
     </label>
   );
@@ -59,4 +59,32 @@ export function DemoSelect({ className = "", ...props }: DemoSelectProps) {
       {...props}
     />
   );
+}
+
+type DemoMenuProps = {
+  label: string;
+  children: ReactNode;
+  disabled?: boolean;
+};
+
+export function DemoMenu({ label, children, disabled = false }: DemoMenuProps) {
+  return (
+    <details className="group relative shrink-0">
+      <summary
+        aria-disabled={disabled}
+        className={`${demoButtonClass} list-none cursor-pointer select-none marker:hidden group-open:border-neutral-400 group-open:bg-neutral-100 ${
+          disabled ? "pointer-events-none opacity-40" : ""
+        }`}
+      >
+        {label}
+      </summary>
+      <div className="absolute right-0 top-[calc(100%+6px)] z-50 w-max max-w-[calc(100vw-24px)] border border-neutral-200 bg-white p-2 shadow-lg">
+        <div className="flex flex-col gap-2">{children}</div>
+      </div>
+    </details>
+  );
+}
+
+export function DemoMenuRow({ children }: { children: ReactNode }) {
+  return <div className="flex flex-wrap items-center gap-1.5">{children}</div>;
 }

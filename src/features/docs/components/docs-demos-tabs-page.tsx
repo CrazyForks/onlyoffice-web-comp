@@ -40,7 +40,7 @@ export function DocsDemosTabsPage({ contents }: DocsDemosTabsPageProps) {
   const tocHeadings = useMemo(() => getTocHeadings(fullContent), [fullContent]);
 
   return (
-    <div className="docs-article-layout w-full max-w-full">
+    <div className="docs-article-layout docs-demo-article-layout w-full max-w-full">
       <div className="min-w-0">
         <MarkdownContent content={intro} showToc={false} />
 
@@ -80,7 +80,6 @@ export function DocsDemosTabsPage({ contents }: DocsDemosTabsPageProps) {
 
         {body ? <MarkdownContent content={body} showToc={false} /> : null}
       </div>
-
       <DocToc headings={tocHeadings} />
     </div>
   );

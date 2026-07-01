@@ -5,12 +5,14 @@ import {
 } from "../../const";
 
 let cachedFonts: Record<string, Uint8Array> | null = null;
+let cachedFontsRoot = "";
 let loadingPromise: Promise<Record<string, Uint8Array>> | null = null;
+let loadingFontsRoot = "";
 
-async function fetchPdfFontFile(origin: string, file: string) {
+async function fetchPdfFontFile(origin: string, root: string, file: string) {
   const url = resolveSiteUrl(
     origin,
-    `${STATIC_RESOURCE.x2t.pdfFonts.root}/${file}`,
+    `${root}/${file}`,
   );
   const response = await fetch(url);
   if (!response.ok) {
@@ -24,19 +26,21 @@ async function fetchPdfFontFile(origin: string, file: string) {
 /** 加载 PDF 导出字体，结果缓存在内存中。 */
 export async function loadX2tPdfFonts(
   origin: string,
+  root = STATIC_RESOURCE.x2t.pdfFonts.root,
 ): Promise<Record<string, Uint8Array>> {
-  if (cachedFonts) {
+  if (cachedFonts && cachedFontsRoot === root) {
     return cachedFonts;
   }
-  if (loadingPromise) {
+  if (loadingPromise && loadingFontsRoot === root) {
     return loadingPromise;
   }
+  loadingFontsRoot = root;
 
   loadingPromise = (async () => {
     const fonts: Record<string, Uint8Array> = {};
 
     for (const entry of X2T_PDF_FONT_MANIFEST) {
-      const bytes = await fetchPdfFontFile(origin, entry.file);
+      const bytes = await fetchPdfFontFile(origin, root, entry.file);
       if (!bytes) {
         continue;
       }
@@ -48,12 +52,13 @@ export async function loadX2tPdfFonts(
     if (!fonts["Carlito.ttf"]?.byteLength) {
       console.warn(
         "[x2t-pdf-fonts] Carlito regular missing under",
-        STATIC_RESOURCE.x2t.pdfFonts.root,
+        root,
       );
       return {};
     }
 
     cachedFonts = fonts;
+    cachedFontsRoot = root;
     return cachedFonts;
   })();
 

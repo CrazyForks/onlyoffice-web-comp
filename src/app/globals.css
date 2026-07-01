@@ -254,6 +254,14 @@ code {
   }
 }
 
+.docs-demo-article-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.docs-demo-article-layout .docs-page-toc {
+  display: none;
+}
+
 .docs-page-toc {
   display: none;
 }
@@ -431,12 +439,12 @@ code {
 }
 
 .docs-demo-shell--single {
-  height: min(68vh, 640px);
+  height: calc(100dvh - 14rem);
   min-height: 420px;
 }
 
 .docs-demo-shell--multi {
-  height: min(72vh, 680px);
+  height: calc(100dvh - 14rem);
   min-height: 480px;
 }
 

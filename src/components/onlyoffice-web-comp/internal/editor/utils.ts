@@ -383,7 +383,7 @@ export function getX2tExportFormats(
   fileType: string,
   sourceFileType?: string,
 ) {
-  const ext = getFileExt(fileType);
+  const ext = normalizeX2tExportFileType(fileType);
   const source = sourceFileType ?? fileType;
   const formatTo =
     x2tSourceFormatByExt[ext] ?? getDefaultX2tSourceFormat(source);
@@ -392,6 +392,12 @@ export function getX2tExportFormats(
     formatFrom: getX2tBinFormat(source),
     formatTo,
   };
+}
+
+/** x2t wasm 无法稳定输出旧二进制 .doc；导出时降级为 docx。 */
+export function normalizeX2tExportFileType(fileType: string) {
+  const ext = getFileExt(fileType);
+  return ext === "doc" ? "docx" : ext;
 }
 
 const outputFormatToExt: Record<number, string> = Object.fromEntries(

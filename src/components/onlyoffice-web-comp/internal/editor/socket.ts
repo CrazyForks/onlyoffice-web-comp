@@ -5,6 +5,8 @@ type Callback = (...args: any[]) => void;
 export interface MockSocketOptions {
   /** Enable debug logging. Defaults to true in development mode. */
   debug?: boolean;
+  /** 跨域 bridge 父页侧仅路由消息，不自动 connect */
+  deferConnect?: boolean;
 }
 
 /**
@@ -37,32 +39,32 @@ export class MockSocket<
     setSessionToken: () => {
       /* no-op */
     },
-    on: () => {
-      /* no-op */
+    on: function () {
+      return this;
     },
-    reconnectionAttempts: () => {
-      /* no-op */
+    reconnectionAttempts: function () {
+      return this;
     },
-    reconnectionDelay: () => {
-      /* no-op */
+    reconnectionDelay: function () {
+      return this;
     },
-    reconnectionDelayMax: () => {
-      /* no-op */
+    reconnectionDelayMax: function () {
+      return this;
     },
-    timeout: () => {
-      /* no-op */
+    timeout: function () {
+      return this;
     },
-    transports: () => {
-      /* no-op */
+    transports: function () {
+      return this;
     },
-    upgrade: () => {
-      /* no-op */
+    upgrade: function () {
+      return this;
     },
-    upgradeTransport: () => {
-      /* no-op */
+    upgradeTransport: function () {
+      return this;
     },
-    upgradeTimeout: () => {
-      /* no-op */
+    upgradeTimeout: function () {
+      return this;
     },
   };
 
@@ -73,8 +75,10 @@ export class MockSocket<
   private _debug: boolean;
 
   constructor(options: MockSocketOptions = {}) {
-    this._debug = options.debug ;
-    this.connect(); // Auto-connect on instantiation
+    this._debug = options.debug;
+    if (!options.deferConnect) {
+      this.connect();
+    }
   }
 
   private _log(...args: any[]): void {
