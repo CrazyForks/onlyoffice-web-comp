@@ -1,5 +1,4 @@
 import { converter } from "./x2t";
-import JSZip from "jszip";
 import { MockSocket } from "./socket";
 import {
   User,
@@ -25,6 +24,12 @@ import {
 import { getOnlyOfficeMimeType } from "../../util/document-file";
 import { isOnlyOfficeCdnMode } from "../../const";
 import { allPlugins, featuredPlugins, getPluginsData } from "./plugins";
+import {
+  readZipEntries,
+  readZipEntryData,
+  writeZipEntries,
+  type ZipReplacement,
+} from "./zip";
 
 /**
  * Mock OnlyOffice 协作服务：维护 fsMap（Editor.bin + media），处理 WebSocket 与 /downloadas/ HTTP。
@@ -903,36 +908,55 @@ export class EditorServer {
       return buffer;
     }
 
-    const zip = await JSZip.loadAsync(buffer);
-    const replacements = new Map<string, string>();
+    const entries = readZipEntries(buffer);
+    if (!entries) {
+      return buffer;
+    }
 
-    const mediaFiles = Object.values(zip.files).filter(
-      (file) =>
-        !file.dir && /^ppt\/media\/[^/]+\.(emf|svg|webp)$/i.test(file.name),
+    const replacements = new Map<string, string>();
+    const entryReplacements = new Map<string, ZipReplacement>();
+
+    const mediaFiles = entries.filter(
+      (entry) =>
+        !entry.name.endsWith("/") &&
+        /^ppt\/media\/[^/]+\.(emf|svg|webp)$/i.test(entry.name),
     );
 
-    for (const file of mediaFiles) {
-      const pngName = file.name.replace(/\.(emf|svg|webp)$/i, ".png");
-      const source = await file.async("uint8array");
-      const pngData = /\.svg$/i.test(file.name)
+    for (const entry of mediaFiles) {
+      const pngName = entry.name.replace(/\.(emf|svg|webp)$/i, ".png");
+      const source = await readZipEntryData(entry);
+      if (!source) {
+        continue;
+      }
+
+      const pngData = /\.svg$/i.test(entry.name)
         ? await rasterizeSvgToPng(source)
-        : /\.webp$/i.test(file.name)
+        : /\.webp$/i.test(entry.name)
           ? await rasterizeWebpToPng(source)
         : TRANSPARENT_PNG;
 
-      zip.file(pngName, pngData);
-      replacements.set(file.name, pngName);
+      entryReplacements.set(pngName, {
+        data: pngData,
+        modTime: entry.modTime,
+        modDate: entry.modDate,
+      });
+      replacements.set(entry.name, pngName);
     }
 
     if (replacements.size === 0) {
       return buffer;
     }
 
-    const relFiles = Object.values(zip.files).filter(
-      (file) => !file.dir && file.name.endsWith(".rels"),
+    const relFiles = entries.filter(
+      (entry) => !entry.name.endsWith("/") && entry.name.endsWith(".rels"),
     );
     for (const relFile of relFiles) {
-      let text = await relFile.async("text");
+      const source = await readZipEntryData(relFile);
+      if (!source) {
+        continue;
+      }
+
+      let text = new TextDecoder().decode(source);
       let changed = false;
 
       for (const [from, to] of replacements) {
@@ -953,19 +977,31 @@ export class EditorServer {
       }
 
       if (changed) {
-        zip.file(relFile.name, text);
+        entryReplacements.set(relFile.name, {
+          data: new TextEncoder().encode(text),
+          modTime: relFile.modTime,
+          modDate: relFile.modDate,
+        });
       }
     }
 
-    const contentTypes = zip.file("[Content_Types].xml");
+    const contentTypes = entries.find(
+      (entry) => entry.name === "[Content_Types].xml",
+    );
     if (contentTypes) {
-      zip.file(
-        "[Content_Types].xml",
-        ensurePngContentType(await contentTypes.async("text")),
-      );
+      const source = await readZipEntryData(contentTypes);
+      if (source) {
+        entryReplacements.set(contentTypes.name, {
+          data: new TextEncoder().encode(
+            ensurePngContentType(new TextDecoder().decode(source)),
+          ),
+          modTime: contentTypes.modTime,
+          modDate: contentTypes.modDate,
+        });
+      }
     }
 
-    return zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
+    return writeZipEntries(entries, entryReplacements);
   }
 
   private async loadCsvDocument(buffer: ArrayBuffer) {
