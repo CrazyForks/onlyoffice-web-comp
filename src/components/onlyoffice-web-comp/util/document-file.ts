@@ -116,6 +116,7 @@ export async function exportEditorDocumentAsFile(
     exported.fileName || fileName,
     fileTypeConstant,
     exported.media,
+    exported.themes,
   );
   const mimeType = getOnlyOfficeMimeType(fileExtension);
   const bytes = new Uint8Array(result.data);

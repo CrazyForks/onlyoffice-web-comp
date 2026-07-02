@@ -23,6 +23,12 @@ const X2T_ORIGIN = self.location.origin;
 let x2t: any = null;
 let initPromise: Promise<void> | null = null;
 let initResourceKey = "";
+const transparentPng = Uint8Array.from(
+  atob(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+  ),
+  (value) => value.charCodeAt(0),
+);
 
 const crcTable = (() => {
   const table = new Uint32Array(256);
@@ -513,6 +519,7 @@ function cleanupFiles(files: string[]): void {
   }
   cleanMedia();
   cleanFonts();
+  cleanThemes();
 }
 
 function cleanMedia() {
@@ -538,6 +545,60 @@ function cleanFonts() {
     }
   } catch (err) {
     console.error(err);
+  }
+}
+
+function cleanThemes() {
+  cleanDirectoryFiles("/working/themes");
+}
+
+function cleanDirectoryFiles(dir: string) {
+  try {
+    const files = x2t.FS.readdir(dir);
+    for (const file of files) {
+      if (file === "." || file === "..") {
+        continue;
+      }
+
+      const path = `${dir}/${file}`;
+      const stat = x2t.FS.stat(path);
+      if (x2t.FS.isDir(stat.mode)) {
+        cleanDirectoryFiles(path);
+        x2t.FS.rmdir(path);
+      } else {
+        x2t.FS.unlink(path);
+      }
+    }
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function ensureDirectory(path: string) {
+  const parts = path.split("/").filter(Boolean);
+  let current = "";
+
+  for (const part of parts) {
+    current += "/" + part;
+    try {
+      if (!x2t.FS.analyzePath(current).exists) {
+        x2t.FS.mkdir(current);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }
+}
+
+function writeFileMap(files: { [key: string]: Uint8Array }) {
+  for (const [key, value] of Object.entries(files)) {
+    try {
+      const path = "/working/" + key.replace(/^\/+/, "");
+      ensureDirectory(path.split("/").slice(0, -1).join("/"));
+      x2t.FS.writeFile(path, value);
+    } catch (err) {
+      console.error(key, err);
+    }
   }
 }
 
@@ -592,6 +653,37 @@ function readMedia(): { [key: string]: Uint8Array } {
   return media;
 }
 
+function readDirectoryFiles(root: string, prefix: string) {
+  const files: { [key: string]: Uint8Array } = {};
+
+  const visit = (dir: string, relDir: string) => {
+    try {
+      for (const file of x2t.FS.readdir(dir)) {
+        if (file === "." || file === "..") {
+          continue;
+        }
+
+        const path = `${dir}/${file}`;
+        const rel = relDir ? `${relDir}/${file}` : file;
+        const stat = x2t.FS.stat(path);
+        if (x2t.FS.isDir(stat.mode)) {
+          visit(path, rel);
+          continue;
+        }
+
+        files[`${prefix}/${rel}`] = x2t.FS.readFile(path, {
+          encoding: "binary",
+        });
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  visit(root, "");
+  return files;
+}
+
 const xmlPath = "/working/params.xml";
 
 function writeInputs({
@@ -602,6 +694,7 @@ function writeInputs({
   data,
   media,
   pdfBin,
+  themes,
   csvEncoding,
   csvDelimiter,
   csvDelimiterChar,
@@ -654,11 +747,17 @@ ${content}
     cleanMedia();
     for (const [key, value] of Object.entries(media)) {
       try {
-        x2t.FS.writeFile("/working/" + key, value);
+        const data = /\.(emf|svg|webp)$/i.test(key) ? transparentPng : value;
+        x2t.FS.writeFile("/working/" + key, data);
       } catch (err) {
         console.error(key, err);
       }
     }
+  }
+
+  if (themes) {
+    cleanThemes();
+    writeFileMap(themes);
   }
 }
 
@@ -721,6 +820,7 @@ async function convert({
     formatTo,
     data: preparedData,
     media,
+    themes,
     pdfBin,
     csvEncoding,
     csvDelimiter,
@@ -805,13 +905,14 @@ async function convert({
 
   // Read media files
   const outputMedia = readMedia();
+  const outputThemes = readDirectoryFiles("/working/themes", "themes");
 
   // Cleanup temporary files
   setTimeout(() => {
     cleanupFiles(files);
   });
 
-  return { output, media: outputMedia };
+  return { output, media: outputMedia, themes: outputThemes };
 }
 
 // Message types

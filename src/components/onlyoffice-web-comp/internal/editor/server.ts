@@ -1,4 +1,5 @@
 import { converter } from "./x2t";
+import JSZip from "jszip";
 import { MockSocket } from "./socket";
 import {
   User,
@@ -120,6 +121,12 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string) {
 }
 
 const PDF_CONVERT_TIMEOUT_MS = 120_000;
+const TRANSPARENT_PNG = Uint8Array.from(
+  atob(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+  ),
+  (value) => value.charCodeAt(0),
+);
 
 function randomId() {
   return Math.random().toString(36).substring(2, 9);
@@ -181,6 +188,162 @@ function getUrl(data: Uint8Array, type?: string) {
     type: type || "application/octet-stream",
   });
   return URL.createObjectURL(blob);
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function ensurePngContentType(contentTypes: string) {
+  if (/Extension="png"/i.test(contentTypes)) {
+    return contentTypes;
+  }
+
+  return contentTypes.replace(
+    "</Types>",
+    '<Default Extension="png" ContentType="image/png"/></Types>',
+  );
+}
+
+function parseSvgSize(svgText: string) {
+  const width = Number(/<svg\b[^>]*\bwidth="([\d.]+)/i.exec(svgText)?.[1]);
+  const height = Number(/<svg\b[^>]*\bheight="([\d.]+)/i.exec(svgText)?.[1]);
+  if (width > 0 && height > 0) {
+    return { width, height };
+  }
+
+  const viewBox = /<svg\b[^>]*\bviewBox="([^"]+)"/i
+    .exec(svgText)?.[1]
+    ?.trim()
+    .split(/\s+/)
+    .map(Number);
+  if (viewBox?.length === 4 && viewBox[2] > 0 && viewBox[3] > 0) {
+    return { width: viewBox[2], height: viewBox[3] };
+  }
+
+  return { width: 256, height: 256 };
+}
+
+async function rasterizeImageToPng(
+  imageBytes: Uint8Array,
+  mimeType: string,
+  fallbackSize?: { width: number; height: number },
+) {
+  if (typeof document === "undefined") {
+    return TRANSPARENT_PNG;
+  }
+
+  const blob = new Blob([imageBytes as Uint8Array<ArrayBuffer>], {
+    type: mimeType,
+  });
+  const url = URL.createObjectURL(blob);
+
+  try {
+    const image = new Image();
+    image.decoding = "async";
+    const loaded = new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("Failed to decode SVG image"));
+    });
+    image.src = url;
+    await loaded;
+
+    const width = image.naturalWidth || fallbackSize?.width || 256;
+    const height = image.naturalHeight || fallbackSize?.height || 256;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.ceil(width));
+    canvas.height = Math.max(1, Math.ceil(height));
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return TRANSPARENT_PNG;
+    }
+
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const pngBlob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/png"),
+    );
+    if (!pngBlob) {
+      return TRANSPARENT_PNG;
+    }
+
+    return new Uint8Array(await pngBlob.arrayBuffer());
+  } catch (err) {
+    console.warn("[EditorServer] SVG to PNG fallback:", err);
+    return TRANSPARENT_PNG;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function rasterizeSvgToPng(svgBytes: Uint8Array) {
+  const svgText = new TextDecoder().decode(svgBytes);
+  return rasterizeImageToPng(svgBytes, "image/svg+xml", parseSvgSize(svgText));
+}
+
+async function rasterizeWebpToPng(webpBytes: Uint8Array) {
+  return rasterizeImageToPng(webpBytes, "image/webp");
+}
+
+function replaceBytes(data: Uint8Array, from: Uint8Array, to: Uint8Array) {
+  if (from.byteLength !== to.byteLength) {
+    throw new Error("Replacement must keep binary length unchanged");
+  }
+
+  const output = data.slice();
+  for (let i = 0; i <= output.byteLength - from.byteLength; i++) {
+    let matches = true;
+    for (let j = 0; j < from.byteLength; j++) {
+      if (output[i + j] !== from[j]) {
+        matches = false;
+        break;
+      }
+    }
+
+    if (matches) {
+      output.set(to, i);
+      i += from.byteLength - 1;
+    }
+  }
+
+  return output;
+}
+
+function replaceAsciiExtension(
+  data: Uint8Array,
+  fromExt: string,
+  toExt: string,
+) {
+  return replaceBytes(
+    data,
+    new TextEncoder().encode(fromExt),
+    new TextEncoder().encode(toExt),
+  );
+}
+
+function replaceUtf16LeExtension(
+  data: Uint8Array,
+  fromExt: string,
+  toExt: string,
+) {
+  const encode = (value: string) => {
+    const bytes = new Uint8Array(value.length * 2);
+    for (let i = 0; i < value.length; i++) {
+      bytes[i * 2] = value.charCodeAt(i);
+    }
+    return bytes;
+  };
+
+  return replaceBytes(data, encode(fromExt), encode(toExt));
+}
+
+function rewriteEditorBinUnsupportedMediaRefs(data: Uint8Array) {
+  let output = data;
+  for (const fromExt of [".emf", ".EMF", ".svg", ".SVG"]) {
+    const toExt = fromExt === fromExt.toUpperCase() ? ".PNG" : ".png";
+    output = replaceAsciiExtension(output, fromExt, toExt);
+    output = replaceUtf16LeExtension(output, fromExt, toExt);
+  }
+  return output;
 }
 
 /** Response 头值须为 ISO-8859-1；中文文件名放在 filename*=UTF-8 段。 */
@@ -551,18 +714,58 @@ export class EditorServer {
 
   getDocumentSnapshot() {
     const binData = this.fsMap.get("Editor.bin");
-    const media = Object.fromEntries(
-      Array.from(this.fsMap.entries()).filter(([key]) =>
-        key.startsWith("media/"),
-      ),
-    );
+    const media = this.getStoredMedia();
+    const themes = this.getStoredThemes();
 
     return {
       fileName: this.title,
       fileType: this.fileType,
       binData,
       media,
+      themes,
     };
+  }
+
+  private getStoredMedia() {
+    return Object.fromEntries(
+      Array.from(this.fsMap.entries()).filter(([key]) =>
+        key.startsWith("media/"),
+      ),
+    );
+  }
+
+  private getStoredThemes() {
+    return Object.fromEntries(
+      Array.from(this.fsMap.entries()).filter(([key]) =>
+        key.startsWith("themes/"),
+      ),
+    );
+  }
+
+  private getExportSafeMedia() {
+    const media: Record<string, Uint8Array> = {};
+
+    for (const [key, value] of Object.entries(this.getStoredMedia())) {
+      if (/\.(emf|svg|webp)$/i.test(key)) {
+        media[key.replace(/\.(emf|svg|webp)$/i, ".png")] = TRANSPARENT_PNG;
+        continue;
+      }
+
+      media[key] = value;
+    }
+
+    return media;
+  }
+
+  private getExportSafeEditorBin(binData: Uint8Array) {
+    const hasUnsupportedVectorMedia = Object.keys(this.getStoredMedia()).some(
+      (key) => /\.(emf|svg)$/i.test(key),
+    );
+    if (!hasUnsupportedVectorMedia) {
+      return binData;
+    }
+
+    return rewriteEditorBinUnsupportedMediaRefs(binData);
   }
 
   /** 用户保存：更新 Editor.bin 并通知接入层，不触发浏览器下载。 */
@@ -645,13 +848,17 @@ export class EditorServer {
 
     let output: Uint8Array | null = null;
     let media: { [key: string]: Uint8Array } = {};
+    let themes: { [key: string]: Uint8Array } = {};
 
     if (fileType == "pdf") {
       output = new Uint8Array(buffer);
     } else if (fileType === "csv") {
       ({ output, media } = await this.loadCsvDocument(buffer));
     } else {
-      ({ output, media } = await this.convertBufferToEditorBin(buffer, fileType));
+      ({ output, media, themes } = await this.convertBufferToEditorBin(
+        buffer,
+        fileType,
+      ));
     }
 
     if (!output) {
@@ -666,9 +873,13 @@ export class EditorServer {
     for (const name in media) {
       this.addMedia(name, media[name]);
     }
+    for (const [name, data] of Object.entries(themes)) {
+      this.fsMap.set(name, data);
+    }
   }
 
   private async convertBufferToEditorBin(buffer: ArrayBuffer, fileType: string) {
+    buffer = await this.rewriteUnsupportedPptxImages(buffer, fileType);
     const { formatFrom, formatTo } = getX2tConvertFormats(fileType);
     const result = await converter.convert({
       data: buffer,
@@ -677,7 +888,84 @@ export class EditorServer {
       formatFrom,
       formatTo,
     });
-    return { output: result.output, media: result.media };
+    return {
+      output: result.output,
+      media: result.media,
+      themes: result.themes ?? {},
+    };
+  }
+
+  private async rewriteUnsupportedPptxImages(
+    buffer: ArrayBuffer,
+    fileType: string,
+  ) {
+    if (getFileExt(fileType) !== "pptx") {
+      return buffer;
+    }
+
+    const zip = await JSZip.loadAsync(buffer);
+    const replacements = new Map<string, string>();
+
+    const mediaFiles = Object.values(zip.files).filter(
+      (file) =>
+        !file.dir && /^ppt\/media\/[^/]+\.(emf|svg|webp)$/i.test(file.name),
+    );
+
+    for (const file of mediaFiles) {
+      const pngName = file.name.replace(/\.(emf|svg|webp)$/i, ".png");
+      const source = await file.async("uint8array");
+      const pngData = /\.svg$/i.test(file.name)
+        ? await rasterizeSvgToPng(source)
+        : /\.webp$/i.test(file.name)
+          ? await rasterizeWebpToPng(source)
+        : TRANSPARENT_PNG;
+
+      zip.file(pngName, pngData);
+      replacements.set(file.name, pngName);
+    }
+
+    if (replacements.size === 0) {
+      return buffer;
+    }
+
+    const relFiles = Object.values(zip.files).filter(
+      (file) => !file.dir && file.name.endsWith(".rels"),
+    );
+    for (const relFile of relFiles) {
+      let text = await relFile.async("text");
+      let changed = false;
+
+      for (const [from, to] of replacements) {
+        const fromName = from.split("/").pop();
+        const toName = to.split("/").pop();
+        if (!fromName || !toName) {
+          continue;
+        }
+
+        const nextText = text.replace(
+          new RegExp(escapeRegExp(fromName), "g"),
+          toName,
+        );
+        if (nextText !== text) {
+          text = nextText;
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        zip.file(relFile.name, text);
+      }
+    }
+
+    const contentTypes = zip.file("[Content_Types].xml");
+    if (contentTypes) {
+      zip.file(
+        "[Content_Types].xml",
+        ensurePngContentType(await contentTypes.async("text")),
+      );
+    }
+
+    return zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
   }
 
   private async loadCsvDocument(buffer: ArrayBuffer) {
@@ -771,11 +1059,9 @@ export class EditorServer {
   }
 
   private async convertEditorBinToOutput(binData: Uint8Array, filetype: string) {
-    const media = Object.fromEntries(
-      Array.from(this.fsMap.entries()).filter(([key]) =>
-        key.startsWith("media/"),
-      ),
-    );
+    binData = this.getExportSafeEditorBin(binData);
+    const media = this.getExportSafeMedia();
+    const themes = this.getStoredThemes();
     const { formatFrom, formatTo } = getX2tExportFormats(filetype, this.fileType);
     const result = await converter.convert({
       data: binData.slice().buffer,
@@ -784,6 +1070,7 @@ export class EditorServer {
       formatFrom,
       formatTo,
       media,
+      themes,
     });
 
     if (!result.output?.byteLength) {
@@ -815,11 +1102,9 @@ export class EditorServer {
     binData: Uint8Array,
     pdfRendererStream?: Uint8Array,
   ) {
-    const media = Object.fromEntries(
-      Array.from(this.fsMap.entries()).filter(([key]) =>
-        key.startsWith("media/"),
-      ),
-    );
+    binData = this.getExportSafeEditorBin(binData);
+    const media = this.getExportSafeMedia();
+    const themes = this.getStoredThemes();
     const { formatFrom, formatTo } = getX2tExportFormats("pdf", this.fileType);
 
     if (pdfRendererStream?.byteLength) {
@@ -828,6 +1113,7 @@ export class EditorServer {
         fileFrom: "output.bin",
         fileTo: "output.pdf",
         media,
+        themes,
         pdfBin: pdfRendererStream,
       });
 
@@ -846,6 +1132,7 @@ export class EditorServer {
       formatFrom,
       formatTo,
       media,
+      themes,
     });
 
     if (!result.output?.byteLength) {

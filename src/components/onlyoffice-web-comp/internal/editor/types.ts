@@ -230,6 +230,7 @@ export interface X2tConvertParams {
 export interface X2tConvertResult {
   output: Uint8Array | null;
   media: { [key: string]: Uint8Array };
+  themes?: { [key: string]: Uint8Array };
 }
 
 export type OfficeTheme =
@@ -247,6 +248,7 @@ export type EditorDocumentSnapshot = {
   fileType: string;
   binData: Uint8Array | undefined;
   media: Record<string, Uint8Array>;
+  themes: Record<string, Uint8Array>;
 };
 
 export interface ServerOptions {

@@ -13,6 +13,7 @@ export type SaveDocumentData = {
   binData: Uint8Array;
   instanceId: string;
   media?: Record<string, Uint8Array>;
+  themes?: Record<string, Uint8Array>;
 };
 
 export type OnSaveData = {

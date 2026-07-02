@@ -94,6 +94,15 @@ function getX2tBinFormat(fileType: string) {
   }
 }
 
+function getX2tExportBinFormat(fileType: string) {
+  switch (getDocumentType(fileType)) {
+    case DocumentType.Slide:
+      return AvsFileType.AVS_FILE_TEAMLAB_PPTY;
+    default:
+      return getX2tBinFormat(fileType);
+  }
+}
+
 export function getX2tConvertFormats(fileType: string) {
   const ext = getFileExt(fileType);
   const formatFrom =
@@ -389,7 +398,7 @@ export function getX2tExportFormats(
     x2tSourceFormatByExt[ext] ?? getDefaultX2tSourceFormat(source);
 
   return {
-    formatFrom: getX2tBinFormat(source),
+    formatFrom: getX2tExportBinFormat(source),
     formatTo,
   };
 }

@@ -26,6 +26,7 @@ export async function convertBinToDocument(
   fileName: string,
   fileType: FileType | string,
   media?: Record<string, Uint8Array>,
+  themes?: Record<string, Uint8Array>,
 ) {
   const targetExt = normalizeX2tExportFileType(fileType);
   const data = new Uint8Array(binData).buffer;
@@ -37,6 +38,7 @@ export async function convertBinToDocument(
     formatFrom,
     formatTo,
     media,
+    themes,
   });
 
   if (!result.output) {

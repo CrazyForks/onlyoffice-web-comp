@@ -1404,6 +1404,7 @@ export class EditorManager {
         ...snapshot.media,
         ...this.media,
       },
+      themes: snapshot.themes,
     };
   }
 

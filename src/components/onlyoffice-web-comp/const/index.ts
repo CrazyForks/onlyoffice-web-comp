@@ -101,7 +101,7 @@ export type StaticResource = {
 };
 
 export type OnlyOfficeStaticResourceOptions = {
-  /** CDN packages 根地址，例如 https://4772962c.onlyoffice-packages.pages.dev。 */
+  /** CDN packages 根地址，例如 https://770e15f8.onlyoffice-packages.pages.dev。 */
   cdnOrigin?: string | null;
 };
 

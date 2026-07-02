@@ -261,6 +261,7 @@ export class OnlyOfficeManager {
       binData.fileName,
       exportFileType,
       binData.media,
+      binData.themes,
     );
 
     return {
