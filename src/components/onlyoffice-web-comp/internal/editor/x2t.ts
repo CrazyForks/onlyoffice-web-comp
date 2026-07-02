@@ -6,6 +6,7 @@
  */
 
 import { X2tConvertParams, X2tConvertResult } from "./types";
+import { getStaticResource, resolveSiteUrl, type StaticResource } from "../../const";
 
 interface PendingMessage {
   resolve: (value: any) => void;
@@ -24,12 +25,32 @@ export class X2tConverter {
   private initPromise: Promise<void> | null = null;
   private messageId = 0;
   private pendingMessages = new Map<number, PendingMessage>();
+  private resourceKey = "";
 
-  constructor() {
-    // Auto-initialize worker on construction
-    if (globalThis.Worker) {
-      this.init();
+  constructor() {}
+
+  private getWorkerStaticResource(): StaticResource {
+    const staticResource = getStaticResource();
+    if (typeof window === "undefined") {
+      return staticResource;
     }
+
+    const origin = window.location.origin;
+    return {
+      ...staticResource,
+      version: { ...staticResource.version },
+      onlyoffice: { ...staticResource.onlyoffice },
+      x2t: {
+        ...staticResource.x2t,
+        root: resolveSiteUrl(origin, staticResource.x2t.root),
+        script: resolveSiteUrl(origin, staticResource.x2t.script),
+        wasm: resolveSiteUrl(origin, staticResource.x2t.wasm),
+        pdfFonts: {
+          root: resolveSiteUrl(origin, staticResource.x2t.pdfFonts.root),
+          default: resolveSiteUrl(origin, staticResource.x2t.pdfFonts.default),
+        },
+      },
+    };
   }
 
   /**
@@ -148,6 +169,13 @@ export class X2tConverter {
     csvDelimiter,
     csvDelimiterChar,
   }: X2tConvertParams): Promise<X2tConvertResult> {
+    const staticResource = this.getWorkerStaticResource();
+    const resourceKey = JSON.stringify(staticResource.x2t);
+    if (this.worker && this.resourceKey && this.resourceKey !== resourceKey) {
+      this.terminate();
+    }
+    this.resourceKey = resourceKey;
+
     await this.init();
 
     const cloneMap = (map?: { [key: string]: Uint8Array }) => {
@@ -175,6 +203,7 @@ export class X2tConverter {
       csvEncoding,
       csvDelimiter,
       csvDelimiterChar,
+      staticResource,
     };
     return this.sendMessage<X2tConvertResult>("convert", payload);
   }

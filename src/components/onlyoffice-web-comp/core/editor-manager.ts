@@ -1,11 +1,26 @@
 import {
   installOnlyOfficeProxies,
   installReporterWindowHook,
+  registerScopedIo,
+  unregisterScopedIo,
   type OnlyOfficeProxyWindow,
   type ReporterHookWindow,
+  type ScopedIoFactory,
 } from "../internal/editor/install-proxies";
+import {
+  callCrossOriginEditor,
+  canAccessIframeWindow,
+  setCrossOriginReadOnly,
+  subscribeCrossOriginEditorEvent,
+  unregisterCrossOriginBridge,
+  watchCrossOriginIframe,
+} from "../internal/editor/cross-origin-bridge";
+import {
+  CROSS_ORIGIN_EDITOR_COMMAND,
+  CROSS_ORIGIN_EDITOR_EVENT,
+} from "../internal/editor/cross-origin-protocol";
 import { EditorServer } from "../internal/editor/server";
-import io, { MockSocket, type MockSocketOptions } from "../internal/editor/socket";
+import io, { type MockSocketOptions } from "../internal/editor/socket";
 import {
   type DocEditor,
   DocumentType,
@@ -13,11 +28,9 @@ import {
   type PluginMode,
   type User,
 } from "../internal/editor/types";
-import { getDocumentType } from "../const";
+import { getDocumentType, isOnlyOfficeCdnMode } from "../const";
 import type { AscWordApiCallback, AscWordApiMethod } from "../type/word-api";
-import {
-  type OnlyOfficeIframeWindow,
-} from "../type/sdk-internal";
+import { type OnlyOfficeIframeWindow } from "../type/sdk-internal";
 import {
   ONLYOFFICE_CONTAINER_CONFIG,
   ONLYOFFICE_EVENT_KEYS,
@@ -90,7 +103,11 @@ type OnlyOfficeSdkApi = {
   asc_addComment?: (data: CommentData) => string | undefined;
   asc_changeComment?: (id: string, data: CommentData) => void;
   asc_removeComment?: (id: string) => void;
-  sync_ChangeCommentData?: (id: string, data: unknown, ...args: unknown[]) => unknown;
+  sync_ChangeCommentData?: (
+    id: string,
+    data: unknown,
+    ...args: unknown[]
+  ) => unknown;
   __ONLYOFFICE_RESOLVE_PATCHED__?: boolean;
   asc_selectComment?: (id: string) => void;
   asc_showComment?: (id: string) => void;
@@ -117,19 +134,19 @@ type OnlyOfficeSdkApi = {
   pluginMethod_GetAllComments?: () => Array<{ Id: string; Data: CommentData }>;
   pluginMethod_AddComment?: (data: CommentData) => string | null;
   pluginMethod_ChangeComment?: (id: string, data: CommentData) => void;
+  pluginMethod_InputText?: (text: string) => void;
+  pluginMethod_PasteText?: (text: string) => void;
+  asc_AddText?: (text: string) => void;
 };
 
 /** iframe 内运行时；混淆字段见 type/sdk-internal.ts，asc_* 为公开 API */
 type OnlyOfficeWindow = OnlyOfficeIframeWindow & {
   Asc?: Omit<NonNullable<OnlyOfficeIframeWindow["Asc"]>, "editor"> & {
-    editor?: OnlyOfficeSdkApi &
-      {
-        asc_Recalculate?: () => void;
-      };
+    editor?: OnlyOfficeSdkApi & {
+      asc_Recalculate?: () => void;
+    };
   };
 };
-
-type ScopedIoFactory = (url?: string, options?: MockSocketOptions) => MockSocket;
 
 type ShellMainController = {
   mode?: { isEdit?: boolean; canEdit?: boolean };
@@ -138,10 +155,6 @@ type ShellMainController = {
 type WordHeaderView = {
   btnDocMode?: { setVisible?: (visible: boolean) => void };
   btnPDFMode?: { setVisible?: (visible: boolean) => void };
-};
-
-type OnlyOfficeParentWindow = Window & {
-  __ONLYOFFICE_SCOPED_IO__?: Record<string, ScopedIoFactory>;
 };
 
 export class EditorManager {
@@ -158,11 +171,17 @@ export class EditorManager {
   private fileType = "docx";
   private media: Record<string, Uint8Array> = {};
   private comments = new Map<string, CommentData>();
+  private crossOriginCommentRefreshPromise: Promise<CommentItem[]> | null =
+    null;
   private revisions: RevisionItem[] = [];
   private refreshingRevisions = false;
+  private crossOriginRevisionRefreshPromise: Promise<RevisionItem[]> | null =
+    null;
+  private trackRevisions = false;
   private revisionReviewMode = false;
   private wordContentSyncPromise: Promise<void> | null = null;
   private wordContentSyncTeardown: (() => void) | null = null;
+  private crossOriginBridgeTeardown: (() => void) | null = null;
 
   constructor(containerId = ONLYOFFICE_ID) {
     this.containerId = containerId;
@@ -174,7 +193,6 @@ export class EditorManager {
       },
     });
   }
-
 
   private createScopedIo() {
     return (url?: string, options: MockSocketOptions = {}) => {
@@ -191,6 +209,47 @@ export class EditorManager {
     };
   }
 
+  private createCrossOriginServerIo(): ScopedIoFactory {
+    return () => {
+      const socket = io(undefined, { deferConnect: true });
+      socket.connected = true;
+      socket.disconnected = false;
+      return socket;
+    };
+  }
+
+  private syncEditorBridge() {
+    this.crossOriginBridgeTeardown?.();
+    this.crossOriginBridgeTeardown = null;
+    unregisterScopedIo(this.containerId);
+
+    registerScopedIo(this.containerId, this.createScopedIo());
+    if (!isOnlyOfficeCdnMode()) {
+      return;
+    }
+
+    this.crossOriginBridgeTeardown = watchCrossOriginIframe(
+      this.containerId,
+      () => this.getEditorFrameElement(),
+      this.server,
+      this.createCrossOriginServerIo(),
+    );
+  }
+
+  private syncCrossOriginReadOnly(readOnly: boolean, retries = 10) {
+    if (setCrossOriginReadOnly(this.containerId, readOnly)) {
+      return true;
+    }
+
+    if (retries > 0) {
+      window.setTimeout(() => {
+        this.syncCrossOriginReadOnly(readOnly, retries - 1);
+      }, 50);
+    }
+
+    return false;
+  }
+
   private getEditorFrameElement() {
     const containerFrame = document
       .getElementById(this.containerId)
@@ -201,7 +260,9 @@ export class EditorManager {
     }
 
     const frames = Array.from(
-      document.querySelectorAll<HTMLIFrameElement>('iframe[name="frameEditor"]'),
+      document.querySelectorAll<HTMLIFrameElement>(
+        'iframe[name="frameEditor"]',
+      ),
     );
     const matchedFrame = frames.find((frame) => {
       try {
@@ -228,7 +289,9 @@ export class EditorManager {
   }
 
   private installProxiesOnWindow(win: OnlyOfficeProxyWindow) {
-    installOnlyOfficeProxies(win, this.server, this.createScopedIo());
+    installOnlyOfficeProxies(win, this.server, this.createScopedIo(), {
+      installIo: false,
+    });
   }
 
   /**
@@ -237,10 +300,17 @@ export class EditorManager {
    */
   private installIframeProxies() {
     const iframe = this.getEditorFrameElement();
-    const win = iframe?.contentWindow as
-      | (OnlyOfficeWindow & ReporterHookWindow)
-      | undefined;
-    const iframeDoc = iframe?.contentDocument;
+    if (!iframe) {
+      throw new Error("Iframe not loaded");
+    }
+
+    if (!canAccessIframeWindow(iframe)) {
+      return;
+    }
+
+    const win = iframe.contentWindow as
+      (OnlyOfficeWindow & ReporterHookWindow) | undefined;
+    const iframeDoc = iframe.contentDocument;
 
     if (!iframeDoc || !win) {
       throw new Error("Iframe not loaded");
@@ -260,7 +330,11 @@ export class EditorManager {
   private getEditorFrameWindow() {
     const iframe = this.getEditorFrameElement();
 
-    return iframe?.contentWindow as OnlyOfficeWindow | undefined;
+    if (!iframe || !canAccessIframeWindow(iframe)) {
+      return undefined;
+    }
+
+    return iframe.contentWindow as OnlyOfficeWindow | undefined;
   }
 
   private getSdkApi() {
@@ -353,7 +427,9 @@ export class EditorManager {
         trackChanges: this.revisionReviewMode,
         // showReviewChanges:true 会在加载时弹出 asc-window review-changes modal-dlg
         showReviewChanges: false,
-        ...(this.revisionReviewMode ? { reviewDisplay: "markup" as const } : {}),
+        ...(this.revisionReviewMode
+          ? { reviewDisplay: "markup" as const }
+          : {}),
       },
       features: {
         spellcheck: {
@@ -391,6 +467,17 @@ export class EditorManager {
 
   /** 文档若自带 w:trackRevisions，OnlyOffice 默认会跟进入修订模式；接入层强制关闭录制。 */
   private applyDefaultReviewSettings() {
+    this.trackRevisions = false;
+    if (isOnlyOfficeCdnMode()) {
+      void this.callCrossOriginRevision(
+        CROSS_ORIGIN_EDITOR_COMMAND.REVISION_SET_TRACK,
+        {
+          enabled: false,
+        },
+      ).catch(() => {});
+      return;
+    }
+
     const api = this.getSdkApi();
     api?.asc_SetGlobalTrackRevisions?.(false);
   }
@@ -427,10 +514,67 @@ export class EditorManager {
   }
 
   private refreshCommentsFromSdk() {
+    if (isOnlyOfficeCdnMode()) {
+      void this.refreshCrossOriginComments().catch(() => {});
+      return;
+    }
+
     this.mergeCommentItems(this.fetchCommentsFromSdk());
   }
 
+  private normalizeCrossOriginComments(value: unknown): CommentItem[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.map((item, index) => {
+      const source =
+        item && typeof item === "object"
+          ? (item as Record<string, unknown>)
+          : {};
+      const data =
+        source.Data && typeof source.Data === "object"
+          ? (source.Data as CommentData)
+          : {};
+
+      return {
+        Id: String(source.Id ?? `comment-${index}`),
+        Data: data,
+      };
+    });
+  }
+
+  private refreshCrossOriginComments() {
+    if (this.crossOriginCommentRefreshPromise) {
+      return this.crossOriginCommentRefreshPromise;
+    }
+
+    this.crossOriginCommentRefreshPromise = this.callCrossOriginComment(
+      CROSS_ORIGIN_EDITOR_COMMAND.COMMENT_LIST,
+      {},
+    )
+      .then((items) => {
+        const normalized = this.normalizeCrossOriginComments(items);
+        this.comments.clear();
+        this.mergeCommentItems(normalized);
+        return Array.from(this.comments.entries()).map(([Id, Data]) => ({
+          Id,
+          Data,
+        }));
+      })
+      .finally(() => {
+        this.crossOriginCommentRefreshPromise = null;
+      });
+
+    return this.crossOriginCommentRefreshPromise;
+  }
+
   private refreshRevisionsFromSdk(options?: { forceRefreshStack?: boolean }) {
+    if (isOnlyOfficeCdnMode()) {
+      void this.refreshCrossOriginRevisions(options).catch(() => {});
+      return;
+    }
+
     if (this.refreshingRevisions) return;
 
     const api = this.getSdkApi();
@@ -453,6 +597,11 @@ export class EditorManager {
   }
 
   private applyRevisionsFromSdkStack(stack: unknown) {
+    if (isOnlyOfficeCdnMode()) {
+      this.revisions = this.normalizeCrossOriginRevisions(stack);
+      return;
+    }
+
     const api = this.getSdkApi();
     const frameWin = this.getEditorFrameWindow();
     if (!api || !frameWin) return;
@@ -469,6 +618,17 @@ export class EditorManager {
   }
 
   private applyAllRevisionChanges(mode: "accept" | "reject") {
+    if (isOnlyOfficeCdnMode()) {
+      void this.callCrossOriginRevision(
+        mode === "accept"
+          ? CROSS_ORIGIN_EDITOR_COMMAND.REVISION_ACCEPT_ALL
+          : CROSS_ORIGIN_EDITOR_COMMAND.REVISION_REJECT_ALL,
+      ).then((items) => {
+        this.revisions = this.normalizeCrossOriginRevisions(items);
+      });
+      return;
+    }
+
     const api = this.requireSdkApi() as RevisionsEditorApi;
     const frameWin = this.getEditorFrameWindow();
     if (!frameWin) {
@@ -480,9 +640,10 @@ export class EditorManager {
         ? () => api.asc_AcceptChanges?.()
         : () => api.asc_RejectChanges?.();
 
+    this.refreshRevisionsFromSdk({ forceRefreshStack: true });
     let guard = 0;
     let stagnant = 0;
-    let lastCount = this.getAllRevisions().length;
+    let lastCount = this.revisions.length;
 
     while (this.haveRevisionsChanges() && guard++ < 20) {
       this.refreshRevisionsFromSdk({ forceRefreshStack: true });
@@ -497,7 +658,7 @@ export class EditorManager {
       applyRevisionChange(mode, first, api, frameWin, this.revisions);
       this.syncRevisionsAfterMutation();
 
-      const nextCount = this.getAllRevisions().length;
+      const nextCount = this.revisions.length;
       if (nextCount >= lastCount && this.haveRevisionsChanges()) {
         stagnant += 1;
         if (stagnant >= 3) {
@@ -513,6 +674,96 @@ export class EditorManager {
     }
 
     this.syncRevisionsAfterMutation();
+  }
+
+  private normalizeCrossOriginRevisions(value: unknown): RevisionItem[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.map((item, index) => {
+      const source =
+        item && typeof item === "object"
+          ? (item as Record<string, unknown>)
+          : {};
+      const data =
+        source.Data && typeof source.Data === "object"
+          ? (source.Data as RevisionItem["Data"])
+          : {};
+
+      return {
+        Id: String(source.Id ?? `rev-stack-${index}`),
+        Index:
+          typeof source.Index === "number" && Number.isFinite(source.Index)
+            ? source.Index
+            : index,
+        Data: data,
+        Raw: (source.Raw ?? {}) as RevisionItem["Raw"],
+      };
+    });
+  }
+
+  private refreshCrossOriginRevisions(options?: {
+    forceRefreshStack?: boolean;
+  }) {
+    if (this.crossOriginRevisionRefreshPromise) {
+      return this.crossOriginRevisionRefreshPromise;
+    }
+
+    this.crossOriginRevisionRefreshPromise = this.callCrossOriginRevision(
+      CROSS_ORIGIN_EDITOR_COMMAND.REVISION_LIST,
+      {
+        forceRefreshStack: !!options?.forceRefreshStack,
+      },
+    )
+      .then((items) => {
+        this.revisions = this.normalizeCrossOriginRevisions(items);
+        return this.revisions;
+      })
+      .finally(() => {
+        this.crossOriginRevisionRefreshPromise = null;
+      });
+
+    return this.crossOriginRevisionRefreshPromise;
+  }
+
+  private callCrossOriginRevision(
+    command: string,
+    payload: Record<string, unknown> = {},
+  ) {
+    return callCrossOriginEditor(this.containerId, command, payload);
+  }
+
+  private revisionTargetId(revision: RevisionItem | string) {
+    return typeof revision === "string" ? revision : revision.Id;
+  }
+
+  addDemoRevision(text = `审批修订 ${new Date().toLocaleTimeString()}`) {
+    this.trackRevisions = true;
+    if (isOnlyOfficeCdnMode()) {
+      return this.callCrossOriginRevision(
+        CROSS_ORIGIN_EDITOR_COMMAND.REVISION_ADD_DEMO,
+        { text },
+      ).then((items) => {
+        this.revisions = this.normalizeCrossOriginRevisions(items);
+        return this.revisions;
+      });
+    }
+
+    const api = this.requireSdkApi() as OnlyOfficeSdkApi;
+    api.asc_SetGlobalTrackRevisions?.(true);
+    api.asc_SetLocalTrackRevisions?.(true);
+    if (api.pluginMethod_InputText) {
+      api.pluginMethod_InputText(text);
+    } else if (api.pluginMethod_PasteText) {
+      api.pluginMethod_PasteText(text);
+    } else if (api.asc_AddText) {
+      api.asc_AddText(text);
+    } else {
+      throw new Error("OnlyOffice text insertion API is not available");
+    }
+    this.syncRevisionsAfterMutation();
+    return this.revisions;
   }
 
   private teardownWordContentSync() {
@@ -538,6 +789,70 @@ export class EditorManager {
     }
 
     this.wordContentSyncPromise = (async () => {
+      if (isOnlyOfficeCdnMode()) {
+        await Promise.all([
+          this.refreshCrossOriginComments(),
+          this.refreshCrossOriginRevisions(),
+          this.callCrossOriginComment(
+            CROSS_ORIGIN_EDITOR_COMMAND.COMMENT_SUBSCRIBE,
+            {},
+          ),
+          this.callCrossOriginRevision(
+            CROSS_ORIGIN_EDITOR_COMMAND.REVISION_SUBSCRIBE,
+          ),
+        ]);
+
+        const unsubscribers = [
+          subscribeCrossOriginEditorEvent(
+            this.containerId,
+            CROSS_ORIGIN_EDITOR_EVENT.ADD_COMMENT,
+            ([id, data]) => {
+              const commentId = String(id);
+              const commentData = data as CommentData;
+              if (isResolvedComment(commentData)) {
+                this.comments.delete(commentId);
+                return;
+              }
+
+              this.comments.set(commentId, commentData);
+            },
+          ),
+          subscribeCrossOriginEditorEvent(
+            this.containerId,
+            CROSS_ORIGIN_EDITOR_EVENT.CHANGE_COMMENT,
+            ([id, data]) => {
+              const commentId = String(id);
+              const commentData = data as CommentData;
+              if (isResolvedComment(commentData)) {
+                this.comments.delete(commentId);
+                return;
+              }
+
+              this.comments.set(commentId, commentData);
+            },
+          ),
+          subscribeCrossOriginEditorEvent(
+            this.containerId,
+            CROSS_ORIGIN_EDITOR_EVENT.REMOVE_COMMENT,
+            ([id]) => {
+              this.comments.delete(String(id));
+            },
+          ),
+          subscribeCrossOriginEditorEvent(
+            this.containerId,
+            CROSS_ORIGIN_EDITOR_EVENT.SHOW_REVISIONS_CHANGE,
+            ([items]) => {
+              this.revisions = this.normalizeCrossOriginRevisions(items);
+            },
+          ),
+        ];
+
+        this.wordContentSyncTeardown = () => {
+          unsubscribers.forEach((unsubscribe) => unsubscribe());
+        };
+        return;
+      }
+
       const api = this.requireSdkApi();
 
       this.refreshCommentsFromSdk();
@@ -577,7 +892,7 @@ export class EditorManager {
           },
         }),
         this.subscribe({
-          type: "asc_onShowRevisionsChange",
+          type: CROSS_ORIGIN_EDITOR_EVENT.SHOW_REVISIONS_CHANGE,
           fn: (stack) => {
             this.applyRevisionsFromSdkStack(stack);
           },
@@ -598,11 +913,13 @@ export class EditorManager {
   }
 
   private getRestrictionSdkApi() {
-    return this.getSdkApi() as {
-      asc_setRestriction?: (type: number) => void;
-      asc_removeRestriction?: (type: number) => void;
-      asc_setCanSendChanges?: (enabled: boolean) => void;
-    } | undefined;
+    return this.getSdkApi() as
+      | {
+          asc_setRestriction?: (type: number) => void;
+          asc_removeRestriction?: (type: number) => void;
+          asc_setCanSendChanges?: (enabled: boolean) => void;
+        }
+      | undefined;
   }
 
   private getShellMainController() {
@@ -630,7 +947,9 @@ export class EditorManager {
       };
     };
 
-    return win?.DE?.getController?.("Viewport")?.getView?.("Common.Views.Header");
+    return win?.DE?.getController?.("Viewport")?.getView?.(
+      "Common.Views.Header",
+    );
   }
 
   /** 隐藏 Word 头部「编辑 / 审阅 / 查看」切换（customization + 运行时兜底）。 */
@@ -644,7 +963,7 @@ export class EditorManager {
     header?.btnPDFMode?.setVisible?.(false);
 
     const hedset = this.getEditorFrameWindow()?.document?.querySelector(
-      "[data-layout-name=\"header-editMode\"]",
+      '[data-layout-name="header-editMode"]',
     );
     if (hedset instanceof HTMLElement) {
       hedset.style.display = "none";
@@ -804,11 +1123,13 @@ export class EditorManager {
     }
 
     const patchApi = (
-      api: {
-        AddSlide?: (...args: unknown[]) => unknown;
-        DublicateSlide?: (...args: unknown[]) => unknown;
-        __ONLYOFFICE_SLIDE_BLOCK_PATCHED__?: boolean;
-      } | undefined,
+      api:
+        | {
+            AddSlide?: (...args: unknown[]) => unknown;
+            DublicateSlide?: (...args: unknown[]) => unknown;
+            __ONLYOFFICE_SLIDE_BLOCK_PATCHED__?: boolean;
+          }
+        | undefined,
     ) => {
       if (!api || api.__ONLYOFFICE_SLIDE_BLOCK_PATCHED__) {
         return;
@@ -841,13 +1162,15 @@ export class EditorManager {
       },
     );
     patchApi(
-      (this.getShellMainController() as {
-        api?: {
-          AddSlide?: (...args: unknown[]) => unknown;
-          DublicateSlide?: (...args: unknown[]) => unknown;
-          __ONLYOFFICE_SLIDE_BLOCK_PATCHED__?: boolean;
-        };
-      })?.api,
+      (
+        this.getShellMainController() as {
+          api?: {
+            AddSlide?: (...args: unknown[]) => unknown;
+            DublicateSlide?: (...args: unknown[]) => unknown;
+            __ONLYOFFICE_SLIDE_BLOCK_PATCHED__?: boolean;
+          };
+        }
+      )?.api,
     );
   }
 
@@ -907,8 +1230,14 @@ export class EditorManager {
    * 初始只读与运行时切只读走同一套 asc_setRestriction。
    * 挂载阶段若 permissions.edit=false，xlsx 等会在打开时样式/格式异常；
    * 因此挂载时保持完整编辑权限，documentReady 后再施加只读限制。
+   * CDN 跨域模式通过 iframe 内 bridge 执行同样的 SDK/UI 同步，避免跨域访问 window.Asc。
    */
   private applyInitialReadOnlyState(documentType: DocumentType) {
+    if (isOnlyOfficeCdnMode()) {
+      this.syncCrossOriginReadOnly(this.readOnly);
+      return;
+    }
+
     this.installSlideStructureEditBlocker();
     this.syncEditingRights(false);
 
@@ -1023,6 +1352,12 @@ export class EditorManager {
     }
 
     const documentType = getDocumentType(this.fileType);
+
+    if (isOnlyOfficeCdnMode()) {
+      this.syncCrossOriginReadOnly(!editing);
+      return;
+    }
+
     const sdk = this.getRestrictionSdkApi();
 
     if (sdk?.asc_setRestriction) {
@@ -1051,7 +1386,9 @@ export class EditorManager {
     }
   }
 
-  private createExportData(snapshot: ReturnType<EditorServer["getDocumentSnapshot"]>) {
+  private createExportData(
+    snapshot: ReturnType<EditorServer["getDocumentSnapshot"]>,
+  ) {
     const binData = snapshot.binData;
 
     if (!binData) {
@@ -1104,10 +1441,7 @@ export class EditorManager {
     }, 0);
   }
 
-  private isLoadSessionActive(
-    containerId: string,
-    loadSession?: number,
-  ) {
+  private isLoadSessionActive(containerId: string, loadSession?: number) {
     return (
       loadSession === undefined ||
       editorManagerFactory.isLoadSessionActive(containerId, loadSession)
@@ -1115,7 +1449,8 @@ export class EditorManager {
   }
 
   async create(options: CreateEditorViewOptions) {
-    const containerId = options.containerId || this.containerId || ONLYOFFICE_ID;
+    const containerId =
+      options.containerId || this.containerId || ONLYOFFICE_ID;
 
     if (!this.isLoadSessionActive(containerId, options.loadSession)) {
       return this;
@@ -1165,9 +1500,11 @@ export class EditorManager {
       return this;
     }
 
-    this.editorLang = (options.lang as OnlyOfficeLang | undefined) || getOnlyOfficeLang();
+    this.editorLang =
+      (options.lang as OnlyOfficeLang | undefined) || getOnlyOfficeLang();
     this.uiTheme = options.theme || "theme-white";
 
+    this.syncEditorBridge();
     this.mountDocEditor();
 
     return this;
@@ -1219,6 +1556,11 @@ export class EditorManager {
       }
 
       this.readOnly = readOnly;
+      if (isOnlyOfficeCdnMode()) {
+        this.syncCrossOriginReadOnly(readOnly);
+        return;
+      }
+
       this.installSlideStructureEditBlocker();
       this.syncEditingRights(!readOnly);
     } finally {
@@ -1328,6 +1670,49 @@ export class EditorManager {
     type: AscWordApiMethod;
     fn: AscWordApiCallback;
   }) {
+    if (isOnlyOfficeCdnMode()) {
+      if (
+        type === CROSS_ORIGIN_EDITOR_EVENT.ADD_COMMENT ||
+        type === CROSS_ORIGIN_EDITOR_EVENT.CHANGE_COMMENT ||
+        type === CROSS_ORIGIN_EDITOR_EVENT.REMOVE_COMMENT
+      ) {
+        await this.callCrossOriginComment(
+          CROSS_ORIGIN_EDITOR_COMMAND.COMMENT_SUBSCRIBE,
+          {},
+        );
+        return subscribeCrossOriginEditorEvent(this.containerId, type, (args) =>
+          fn(...args),
+        );
+      }
+
+      if (
+        type === CROSS_ORIGIN_EDITOR_EVENT.SHOW_REVISIONS_CHANGE ||
+        type === CROSS_ORIGIN_EDITOR_EVENT.TRACK_REVISIONS_CHANGE
+      ) {
+        await this.callCrossOriginRevision(
+          CROSS_ORIGIN_EDITOR_COMMAND.REVISION_SUBSCRIBE,
+        );
+        return subscribeCrossOriginEditorEvent(this.containerId, type, (args) =>
+          fn(...args),
+        );
+      }
+
+      if (type === CROSS_ORIGIN_EDITOR_EVENT.DOCUMENT_MODIFIED_CHANGED) {
+        await callCrossOriginEditor(
+          this.containerId,
+          CROSS_ORIGIN_EDITOR_COMMAND.EDITOR_SUBSCRIBE,
+          { event: type },
+        );
+        return subscribeCrossOriginEditorEvent(this.containerId, type, (args) =>
+          fn(...args),
+        );
+      }
+
+      throw new Error(
+        `OnlyOffice cross-origin callback is not supported: ${type}`,
+      );
+    }
+
     const api = this.requireSdkApi();
 
     if (!api.asc_registerCallback || !api.asc_unregisterCallback) {
@@ -1341,13 +1726,20 @@ export class EditorManager {
     };
   }
 
-  getAllComments(): CommentItem[] {
-    this.refreshCommentsFromSdk();
+  async getAllComments(): Promise<CommentItem[]> {
+    if (isOnlyOfficeCdnMode()) {
+      return this.refreshCrossOriginComments();
+    }
 
+    this.refreshCommentsFromSdk();
     return Array.from(this.comments.entries()).map(([Id, Data]) => ({
       Id,
       Data,
     }));
+  }
+
+  refreshComments() {
+    return this.getAllComments();
   }
 
   private createSdkCommentPayload(data: CommentData): unknown {
@@ -1394,7 +1786,27 @@ export class EditorManager {
     return comment;
   }
 
+  async callCrossOriginComment(
+    command: string,
+    payload: Record<string, unknown>,
+  ) {
+    return callCrossOriginEditor(this.containerId, command, payload);
+  }
+
   addComment(input: CommentInput) {
+    if (isOnlyOfficeCdnMode()) {
+      const data = toPluginCommentPayload(normalizeCommentInput(input));
+      return this.callCrossOriginComment(
+        CROSS_ORIGIN_EDITOR_COMMAND.COMMENT_ADD,
+        { data },
+      ).then((id) => {
+        if (id) {
+          this.comments.set(String(id), data);
+        }
+        return id ? String(id) : "";
+      });
+    }
+
     const api = this.requireSdkApi();
     const data = toPluginCommentPayload(normalizeCommentInput(input));
     const id =
@@ -1408,8 +1820,20 @@ export class EditorManager {
 
   updateComment(id: string, data: CommentData) {
     if (isResolvedComment(data)) {
-      this.removeComment(id);
-      return;
+      return this.removeComment(id);
+    }
+
+    if (isOnlyOfficeCdnMode()) {
+      const payload = toPluginCommentPayload(data);
+      return this.callCrossOriginComment(
+        CROSS_ORIGIN_EDITOR_COMMAND.COMMENT_UPDATE,
+        {
+          id,
+          data: payload,
+        },
+      ).then(() => {
+        this.comments.set(id, payload);
+      });
     }
 
     const api = this.requireSdkApi();
@@ -1427,11 +1851,30 @@ export class EditorManager {
   }
 
   removeComment(id: string) {
+    if (isOnlyOfficeCdnMode()) {
+      return this.callCrossOriginComment(
+        CROSS_ORIGIN_EDITOR_COMMAND.COMMENT_REMOVE,
+        { id },
+      ).then(() => {
+        this.comments.delete(id);
+      });
+    }
+
     this.requireSdkApi().asc_removeComment?.(id);
     this.comments.delete(id);
   }
 
-  goToComment(id: string, { showBalloon = false }: { showBalloon?: boolean } = {}) {
+  goToComment(
+    id: string,
+    { showBalloon = false }: { showBalloon?: boolean } = {},
+  ) {
+    if (isOnlyOfficeCdnMode()) {
+      return this.callCrossOriginComment(
+        CROSS_ORIGIN_EDITOR_COMMAND.COMMENT_GO_TO,
+        { id, showBalloon },
+      );
+    }
+
     const api = this.requireSdkApi();
     api.asc_selectComment?.(id);
     if (showBalloon) {
@@ -1440,6 +1883,68 @@ export class EditorManager {
   }
 
   async registerCommentCallbacks(handlers: CommentChangeHandlers) {
+    if (isOnlyOfficeCdnMode()) {
+      const unsubscribers: Array<() => void> = [];
+      await this.callCrossOriginComment(
+        CROSS_ORIGIN_EDITOR_COMMAND.COMMENT_SUBSCRIBE,
+        {},
+      );
+
+      if (handlers.onAdd) {
+        unsubscribers.push(
+          subscribeCrossOriginEditorEvent(
+            this.containerId,
+            CROSS_ORIGIN_EDITOR_EVENT.ADD_COMMENT,
+            ([id, data]) => {
+              const commentId = String(id);
+              const commentData = data as CommentData;
+              this.comments.set(commentId, commentData);
+              handlers.onAdd?.(commentId, commentData);
+            },
+          ),
+        );
+      }
+
+      if (handlers.onChange) {
+        unsubscribers.push(
+          subscribeCrossOriginEditorEvent(
+            this.containerId,
+            CROSS_ORIGIN_EDITOR_EVENT.CHANGE_COMMENT,
+            ([id, data]) => {
+              const commentId = String(id);
+              const commentData = data as CommentData;
+              if (isResolvedComment(commentData)) {
+                this.comments.delete(commentId);
+                handlers.onRemove?.(commentId);
+                return;
+              }
+
+              this.comments.set(commentId, commentData);
+              handlers.onChange?.(commentId, commentData);
+            },
+          ),
+        );
+      }
+
+      if (handlers.onRemove) {
+        unsubscribers.push(
+          subscribeCrossOriginEditorEvent(
+            this.containerId,
+            CROSS_ORIGIN_EDITOR_EVENT.REMOVE_COMMENT,
+            ([id]) => {
+              const commentId = String(id);
+              this.comments.delete(commentId);
+              handlers.onRemove?.(commentId);
+            },
+          ),
+        );
+      }
+
+      return () => {
+        unsubscribers.forEach((unsubscribe) => unsubscribe());
+      };
+    }
+
     const unsubscribers = await Promise.all([
       handlers.onAdd
         ? this.subscribe({
@@ -1489,6 +1994,14 @@ export class EditorManager {
   }
 
   setTrackRevisions(enabled: boolean) {
+    this.trackRevisions = enabled;
+    if (isOnlyOfficeCdnMode()) {
+      return this.callCrossOriginRevision(
+        CROSS_ORIGIN_EDITOR_COMMAND.REVISION_SET_TRACK,
+        { enabled },
+      );
+    }
+
     const api = this.requireSdkApi() as RevisionsEditorApi;
     api.asc_SetGlobalTrackRevisions?.(enabled);
     api.asc_SetLocalTrackRevisions?.(enabled);
@@ -1496,16 +2009,47 @@ export class EditorManager {
 
   /** 修订审阅页初始化：开启追踪 + markup 显示模式（不会批量接受/拒绝） */
   prepareRevisionReview() {
+    this.trackRevisions = true;
+    if (isOnlyOfficeCdnMode()) {
+      return this.callCrossOriginRevision(
+        CROSS_ORIGIN_EDITOR_COMMAND.REVISION_PREPARE_REVIEW,
+      ).then((items) => {
+        this.revisions = this.normalizeCrossOriginRevisions(items);
+      });
+    }
+
     const api = this.requireSdkApi() as RevisionsEditorApi;
     api.asc_SetGlobalTrackRevisions?.(true);
     prepareRevisionReviewDisplay(api, this.getEditorFrameWindow());
   }
 
   isTrackRevisions() {
+    if (isOnlyOfficeCdnMode()) {
+      void this.callCrossOriginRevision(
+        CROSS_ORIGIN_EDITOR_COMMAND.REVISION_IS_TRACK,
+      ).then((enabled) => {
+        this.trackRevisions = !!enabled;
+      });
+      return this.trackRevisions;
+    }
+
     return !!this.getSdkApi()?.asc_GetGlobalTrackRevisions?.();
   }
 
   haveRevisionsChanges() {
+    if (isOnlyOfficeCdnMode()) {
+      void this.callCrossOriginRevision(
+        CROSS_ORIGIN_EDITOR_COMMAND.REVISION_HAVE_CHANGES,
+      ).then((hasChanges) => {
+        if (!hasChanges) {
+          this.revisions = [];
+        } else {
+          void this.refreshCrossOriginRevisions();
+        }
+      });
+      return this.revisions.length > 0;
+    }
+
     const api = this.getSdkApi() as RevisionsEditorApi | undefined;
     if (typeof api?.asc_HaveRevisionsChanges === "function") {
       if (api.asc_HaveRevisionsChanges(true)) {
@@ -1519,20 +2063,55 @@ export class EditorManager {
     return this.revisions.length > 0;
   }
 
-  getAllRevisions(): RevisionItem[] {
-    this.refreshRevisionsFromSdk();
+  async getAllRevisions(): Promise<RevisionItem[]> {
+    if (isOnlyOfficeCdnMode()) {
+      return this.refreshCrossOriginRevisions({ forceRefreshStack: true });
+    }
+
+    this.refreshRevisionsFromSdk({ forceRefreshStack: true });
     return this.revisions;
   }
 
+  refreshRevisions() {
+    return this.getAllRevisions();
+  }
+
   goToNextRevision() {
-    (this.getSdkApi() as RevisionsEditorApi | undefined)?.asc_GetNextRevisionsChange?.();
+    if (isOnlyOfficeCdnMode()) {
+      return this.callCrossOriginRevision(
+        CROSS_ORIGIN_EDITOR_COMMAND.REVISION_NEXT,
+      );
+    }
+
+    (
+      this.getSdkApi() as RevisionsEditorApi | undefined
+    )?.asc_GetNextRevisionsChange?.();
   }
 
   goToPrevRevision() {
-    (this.getSdkApi() as RevisionsEditorApi | undefined)?.asc_GetPrevRevisionsChange?.();
+    if (isOnlyOfficeCdnMode()) {
+      return this.callCrossOriginRevision(
+        CROSS_ORIGIN_EDITOR_COMMAND.REVISION_PREV,
+      );
+    }
+
+    (
+      this.getSdkApi() as RevisionsEditorApi | undefined
+    )?.asc_GetPrevRevisionsChange?.();
   }
 
   goToRevision(id: string) {
+    if (isOnlyOfficeCdnMode()) {
+      const cached = this.revisions.find((entry) => entry.Id === id);
+      return this.callCrossOriginRevision(
+        CROSS_ORIGIN_EDITOR_COMMAND.REVISION_GO_TO,
+        {
+          id,
+          index: cached?.Index,
+        },
+      );
+    }
+
     const api = this.getSdkApi();
     const frameWin = this.getEditorFrameWindow();
     if (!api || !frameWin) return;
@@ -1552,6 +2131,20 @@ export class EditorManager {
   }
 
   acceptRevision(revision: RevisionItem | string) {
+    if (isOnlyOfficeCdnMode()) {
+      const id = this.revisionTargetId(revision);
+      const cached = this.revisions.find((entry) => entry.Id === id);
+      return this.callCrossOriginRevision(
+        CROSS_ORIGIN_EDITOR_COMMAND.REVISION_ACCEPT,
+        {
+          id,
+          index: cached?.Index,
+        },
+      ).then((items) => {
+        this.revisions = this.normalizeCrossOriginRevisions(items);
+      });
+    }
+
     const api = this.getSdkApi();
     const frameWin = this.getEditorFrameWindow();
     if (!api || !frameWin) {
@@ -1572,6 +2165,20 @@ export class EditorManager {
   }
 
   rejectRevision(revision: RevisionItem | string) {
+    if (isOnlyOfficeCdnMode()) {
+      const id = this.revisionTargetId(revision);
+      const cached = this.revisions.find((entry) => entry.Id === id);
+      return this.callCrossOriginRevision(
+        CROSS_ORIGIN_EDITOR_COMMAND.REVISION_REJECT,
+        {
+          id,
+          index: cached?.Index,
+        },
+      ).then((items) => {
+        this.revisions = this.normalizeCrossOriginRevisions(items);
+      });
+    }
+
     const api = this.getSdkApi();
     const frameWin = this.getEditorFrameWindow();
     if (!api || !frameWin) {
@@ -1600,18 +2207,73 @@ export class EditorManager {
   }
 
   acceptRevisionsBySelection(all?: boolean) {
+    if (isOnlyOfficeCdnMode()) {
+      return this.callCrossOriginRevision(
+        CROSS_ORIGIN_EDITOR_COMMAND.REVISION_ACCEPT_SELECTION,
+        { all },
+      ).then((items) => {
+        this.revisions = this.normalizeCrossOriginRevisions(items);
+      });
+    }
+
     this.requireSdkApi().asc_AcceptChangesBySelection?.(all);
   }
 
   rejectRevisionsBySelection(all?: boolean) {
+    if (isOnlyOfficeCdnMode()) {
+      return this.callCrossOriginRevision(
+        CROSS_ORIGIN_EDITOR_COMMAND.REVISION_REJECT_SELECTION,
+        { all },
+      ).then((items) => {
+        this.revisions = this.normalizeCrossOriginRevisions(items);
+      });
+    }
+
     this.requireSdkApi().asc_RejectChangesBySelection?.(all);
   }
 
   async registerRevisionCallbacks(handlers: RevisionChangeHandlers) {
+    if (isOnlyOfficeCdnMode()) {
+      const unsubscribers: Array<() => void> = [];
+      await this.callCrossOriginRevision(
+        CROSS_ORIGIN_EDITOR_COMMAND.REVISION_SUBSCRIBE,
+      );
+
+      if (handlers.onShowChanges) {
+        unsubscribers.push(
+          subscribeCrossOriginEditorEvent(
+            this.containerId,
+            CROSS_ORIGIN_EDITOR_EVENT.SHOW_REVISIONS_CHANGE,
+            ([items]) => {
+              this.revisions = this.normalizeCrossOriginRevisions(items);
+              handlers.onShowChanges?.(this.revisions);
+            },
+          ),
+        );
+      }
+
+      if (handlers.onTrackRevisionsChange) {
+        unsubscribers.push(
+          subscribeCrossOriginEditorEvent(
+            this.containerId,
+            CROSS_ORIGIN_EDITOR_EVENT.TRACK_REVISIONS_CHANGE,
+            ([enabled]) => {
+              this.trackRevisions = !!enabled;
+              handlers.onTrackRevisionsChange?.(!!enabled);
+            },
+          ),
+        );
+      }
+
+      return () => {
+        unsubscribers.forEach((unsubscribe) => unsubscribe());
+      };
+    }
+
     const unsubscribers = await Promise.all([
       handlers.onShowChanges
         ? this.subscribe({
-            type: "asc_onShowRevisionsChange",
+            type: CROSS_ORIGIN_EDITOR_EVENT.SHOW_REVISIONS_CHANGE,
             fn: (stack) => {
               const api = this.getSdkApi();
               const frameWin = this.getEditorFrameWindow();
@@ -1629,7 +2291,7 @@ export class EditorManager {
         : undefined,
       handlers.onTrackRevisionsChange
         ? this.subscribe({
-            type: "asc_onOnTrackRevisionsChange",
+            type: CROSS_ORIGIN_EDITOR_EVENT.TRACK_REVISIONS_CHANGE,
             fn: (enabled) => handlers.onTrackRevisionsChange?.(!!enabled),
           })
         : undefined,
@@ -1646,6 +2308,10 @@ export class EditorManager {
     }
     this.pendingUserSaveSnapshot = null;
     this.teardownWordContentSync();
+    this.crossOriginBridgeTeardown?.();
+    this.crossOriginBridgeTeardown = null;
+    unregisterScopedIo(this.containerId);
+    unregisterCrossOriginBridge(this.containerId);
     this.editor?.destroyEditor?.();
     this.editor = null;
     this.dirty = false;
@@ -1675,7 +2341,8 @@ class EditorManagerFactory {
   }
 
   create(containerId: string) {
-    const manager = this.managers.get(containerId) || new EditorManager(containerId);
+    const manager =
+      this.managers.get(containerId) || new EditorManager(containerId);
     this.managers.set(containerId, manager);
     return manager;
   }
@@ -1706,4 +2373,4 @@ export const editorManagerFactory = new EditorManagerFactory();
 export const editorManager = editorManagerFactory.getDefault();
 if (typeof window !== "undefined") {
   (window as any).editorManagerFactory = editorManagerFactory;
-} 
+}

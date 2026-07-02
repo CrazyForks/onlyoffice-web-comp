@@ -1,5 +1,9 @@
 import { converter } from "../internal/editor/x2t";
-import { getX2tExportFormats } from "../internal/editor/utils";
+import {
+  ensureTitleWithExtension,
+  getX2tExportFormats,
+  normalizeX2tExportFileType,
+} from "../internal/editor/utils";
 import {
   type CreateEditorViewOptions,
   editorManagerFactory,
@@ -20,10 +24,10 @@ export async function createEditorView(options: CreateEditorViewOptions) {
 export async function convertBinToDocument(
   binData: Uint8Array,
   fileName: string,
-  fileType: FileType,
+  fileType: FileType | string,
   media?: Record<string, Uint8Array>,
 ) {
-  const targetExt = fileType.toLowerCase();
+  const targetExt = normalizeX2tExportFileType(fileType);
   const data = new Uint8Array(binData).buffer;
   const { formatFrom, formatTo } = getX2tExportFormats(targetExt);
   const result = await converter.convert({
@@ -40,7 +44,7 @@ export async function convertBinToDocument(
   }
 
   return {
-    fileName,
+    fileName: ensureTitleWithExtension(fileName, targetExt),
     data: result.output,
   };
 }

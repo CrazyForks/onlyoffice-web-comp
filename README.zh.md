@@ -109,6 +109,38 @@ pnpm build
 
 可部署至 Vercel 或任意静态托管。演示地址：[https://onlyoffice-web-comp.vercel.app/](https://onlyoffice-web-comp.vercel.app/)
 
+### 将 SDK 静态资源部署到 Cloudflare Pages CDN
+
+OnlyOffice SDK 资源可以和应用分开托管。把 `public/packages` 的内容部署到 Cloudflare Pages，然后在创建编辑器前注册 Pages 地址即可。
+
+```bash
+# 首次创建项目
+npx wrangler pages project create onlyoffice-packages
+
+# 将 public/packages 作为 CDN 根目录上传
+npx wrangler pages deploy public/packages \
+  --project-name onlyoffice-packages \
+  --commit-dirty=true
+```
+
+部署后资源地址应该类似：
+
+```text
+https://<project>.pages.dev/onlyoffice/9.3.0/web-apps/apps/api/documents/api.js
+```
+
+在运行时把 Pages origin 注册为静态资源根地址：
+
+```typescript
+import { OnlyOfficeManager } from "@/components/onlyoffice-web-comp";
+
+OnlyOfficeManager.registerStaticResource({
+  cdnOrigin: "https://<project>.pages.dev",
+});
+```
+
+`cdnOrigin` 对应上传后的 `public/packages` 根目录，不需要再追加 `/packages`。Cloudflare Pages Direct Upload 支持用 Wrangler 上传目录；由于 SDK 文件数量较多，Dashboard 拖拽上传不太适合本仓库。
+
 ## 字体配置
 
 自定义字体通过 **`__custom_font_registry__`** 注册，配合 **`ttf-to-catalog-font.mjs`** 生成 OnlyOffice catalog 线格式。完整步骤见组件库文档 **[10 - 字体配置](src/components/onlyoffice-web-comp/docs/10-字体配置.md)**。

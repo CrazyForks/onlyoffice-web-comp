@@ -18,14 +18,48 @@ export type ScopedIoFactory = (
   options?: MockSocketOptions,
 ) => MockSocket;
 
+export type OnlyOfficeParentWindow = Window & {
+  __ONLYOFFICE_SCOPED_IO__?: Record<string, ScopedIoFactory>;
+};
+
+export function getScopedIoRegistry(
+  win: Window = window,
+): Record<string, ScopedIoFactory> {
+  const parent = win as OnlyOfficeParentWindow;
+  if (!parent.__ONLYOFFICE_SCOPED_IO__) {
+    parent.__ONLYOFFICE_SCOPED_IO__ = {};
+  }
+  return parent.__ONLYOFFICE_SCOPED_IO__;
+}
+
+export function registerScopedIo(
+  containerId: string,
+  factory: ScopedIoFactory,
+  win: Window = window,
+) {
+  getScopedIoRegistry(win)[containerId] = factory;
+}
+
+export function unregisterScopedIo(containerId: string, win: Window = window) {
+  const registry = (win as OnlyOfficeParentWindow).__ONLYOFFICE_SCOPED_IO__;
+  if (registry) {
+    delete registry[containerId];
+  }
+}
+
 export type OnlyOfficeProxyWindow = Window & {
   __ONLYOFFICE_PROXIES_INSTALLED__?: boolean;
   __ONLYOFFICE_GETFILE_PATCHED__?: boolean;
+  __ONLYOFFICE_PROXY_SERVER__?: EditorServer;
   XMLHttpRequest: typeof XMLHttpRequest;
   Worker: typeof Worker;
   AscCommon?: {
     getFile?: (url: string) => void;
   };
+};
+
+export type InstallOnlyOfficeProxyOptions = {
+  installIo?: boolean;
 };
 
 function extractDownloadFileName(url: string) {
@@ -124,6 +158,7 @@ function installNamedDownloadPatch(
   win: OnlyOfficeProxyWindow,
   server: EditorServer,
 ) {
+  win.__ONLYOFFICE_PROXY_SERVER__ = server;
   const ascCommon = win.AscCommon;
   if (!ascCommon?.getFile || win.__ONLYOFFICE_GETFILE_PATCHED__) {
     return;
@@ -164,9 +199,12 @@ function installNamedDownloadPatch(
       .catch((err) => {
         console.warn("[OnlyOffice] named download fetch failed:", err);
         const outputName = extractOutputNameFromCacheUrl(url);
-        const blobUrl = outputName ? server.getStoredOutputUrl(outputName) : null;
+        const currentServer = win.__ONLYOFFICE_PROXY_SERVER__ ?? server;
+        const blobUrl = outputName
+          ? currentServer.getStoredOutputUrl(outputName)
+          : null;
         const fileName =
-          (outputName && server.getStoredOutputFileName(outputName)) ||
+          (outputName && currentServer.getStoredOutputFileName(outputName)) ||
           fallbackName;
         if (blobUrl) {
           void fetchFile(blobUrl)
@@ -189,7 +227,10 @@ export function installOnlyOfficeProxies(
   win: OnlyOfficeProxyWindow,
   server: EditorServer,
   createIo: ScopedIoFactory,
+  options: InstallOnlyOfficeProxyOptions = {},
 ) {
+  win.__ONLYOFFICE_PROXY_SERVER__ = server;
+
   if (win.__ONLYOFFICE_PROXIES_INSTALLED__) {
     scheduleNamedDownloadPatch(win, server);
     return;
@@ -202,11 +243,12 @@ export function installOnlyOfficeProxies(
   const fetchProxy = createFetchProxy(win);
   const WorkerCtor = win.Worker;
 
-  xhr.use((request) => server.handleRequest(request));
-  fetchProxy.use((request) => server.handleRequest(request));
+  xhr.use((request) => win.__ONLYOFFICE_PROXY_SERVER__?.handleRequest(request) ?? null);
+  fetchProxy.use(
+    (request) => win.__ONLYOFFICE_PROXY_SERVER__?.handleRequest(request) ?? null,
+  );
 
-  Object.assign(win, {
-    io: createIo,
+  const patches: Partial<OnlyOfficeProxyWindow> & { io?: ScopedIoFactory } = {
     XMLHttpRequest: xhr,
     fetch: fetchProxy,
     Worker: function Worker(url: string, options?: WorkerOptions) {
@@ -215,8 +257,13 @@ export function installOnlyOfficeProxies(
         u.href.replace(u.origin, win.location.origin),
         options,
       );
-    },
-  });
+    } as unknown as typeof Worker,
+  };
+  if (options.installIo !== false) {
+    patches.io = createIo;
+  }
+
+  Object.assign(win, patches);
   win.__ONLYOFFICE_PROXIES_INSTALLED__ = true;
   scheduleNamedDownloadPatch(win, server);
 }

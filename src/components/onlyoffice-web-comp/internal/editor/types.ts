@@ -214,6 +214,17 @@ export interface X2tConvertParams {
   fontAliases?: { [key: string]: string };
   fontExportAliases?: { [key: string]: string };
   themes?: { [key: string]: Uint8Array };
+  staticResource?: {
+    x2t: {
+      root: string;
+      script: string;
+      wasm: string;
+      pdfFonts: {
+        root: string;
+        default: string;
+      };
+    };
+  };
 }
 
 export interface X2tConvertResult {

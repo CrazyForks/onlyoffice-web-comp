@@ -9,8 +9,11 @@ import {
   ONLYOFFICE_EVENT_KEYS,
   ONLYOFFICE_LANG_KEY,
   OFFICE_THEME,
+  registerOnlyOfficeStaticResource,
+  resetOnlyOfficeStaticResource,
   type FileType,
   type OfficeThemeId,
+  type OnlyOfficeStaticResourceOptions,
 } from "../const";
 import type { OfficeTheme } from "../internal/editor/types";
 import { getDocmentObj, setDocmentObj } from "../store/document";
@@ -20,14 +23,12 @@ import {
   setCurrentLang,
   type OnlyOfficeLang,
 } from "../store/lang";
-import { downloadBlob, getOfficeMimeType } from "../util/download";
+import { getOnlyOfficeMimeType } from "../util/document-file";
+import { downloadBlob } from "../util/download";
 import { initializeOnlyOffice } from "../util/initialize";
 import { convertBinToDocument } from "../util/x2t";
 import type { User } from "../internal/editor/types";
-import {
-  EditorManager,
-  editorManagerFactory,
-} from "./editor-manager";
+import { EditorManager, editorManagerFactory } from "./editor-manager";
 import { onlyofficeEventbus, type LoadingChangeData } from "./eventbus";
 
 export type OnlyOfficeManagerOptions = {
@@ -78,6 +79,16 @@ export class OnlyOfficeManager {
     if (options.lang) {
       setCurrentLang(options.lang);
     }
+  }
+
+  /** 主实例初始化前，可运行时注册 OnlyOffice / x2t 静态资源地址。 */
+  static registerStaticResource(options: OnlyOfficeStaticResourceOptions) {
+    return registerOnlyOfficeStaticResource(options);
+  }
+
+  /** 清空运行时注册地址，恢复默认静态资源地址。 */
+  static resetStaticResource() {
+    return resetOnlyOfficeStaticResource();
   }
 
   /** 多实例场景：绑定已有 EditorManager，不自动 open */
@@ -244,16 +255,17 @@ export class OnlyOfficeManager {
   /** 导出为 Office 文件 Blob：Editor.bin → x2t → doc.{fileType}。 */
   async exportAsBlob() {
     const binData = await this.editor.export();
+    const exportFileType = binData.fileType || this.fileType.toLowerCase();
     const result = await convertBinToDocument(
       binData.binData,
       binData.fileName,
-      this.fileType,
+      exportFileType,
       binData.media,
     );
 
     return {
       blob: new Blob([result.data as any], {
-        type: getOfficeMimeType(this.fileType),
+        type: getOnlyOfficeMimeType(exportFileType),
       }),
       fileName: result.fileName,
     };

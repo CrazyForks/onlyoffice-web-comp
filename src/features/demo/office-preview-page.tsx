@@ -12,10 +12,7 @@ import {
   OFFICE_THEME_OPTIONS,
   DEFAULT_OFFICE_THEME,
   OnlyOfficeManager,
-  convertBinToDocument,
-  downloadBlob,
   editorManagerFactory,
-  getOnlyOfficeMimeType,
   type FileType,
   type OfficeTheme,
 } from "@/components/onlyoffice-web-comp";
@@ -23,13 +20,23 @@ import {
 import {
   DemoButton,
   DemoField,
+  DemoMenu,
+  DemoMenuRow,
   DemoSelect,
   demoHeaderClass,
   demoHeaderInnerClass,
   demoTitleClass,
   demoToolbarClass,
 } from "./demo-toolbar";
+import { DocxCommentsCrud } from "./docx-comments-crud";
+import { DocxRevisionsCrud } from "./docx-revisions-crud";
 import { getFileExtension, OFFICE_UPLOAD_ACCEPT } from "./office-formats";
+import {
+  applyDemoResourceMode,
+  getDemoResourceState,
+  ResourceSwitcher,
+  subscribeDemoResourceChange,
+} from "./resource-switcher";
 
 type OfficePreviewPageProps = {
   title: string;
@@ -94,6 +101,24 @@ export function OfficePreviewPage({
   );
   const [editorReady, setEditorReady] = useState(false);
   const [activeFileName, setActiveFileName] = useState(defaultFileName);
+  const [cdnOrigin, setCdnOrigin] = useState(
+    () => getDemoResourceState().cdnOrigin,
+  );
+  const [resourceRevision, setResourceRevision] = useState(0);
+
+  useEffect(
+    () =>
+      subscribeDemoResourceChange((state) => {
+        setCdnOrigin(state.cdnOrigin);
+        setLoading(true);
+        managerRef.current?.destroy();
+        managerRef.current = null;
+        editorManagerFactory.destroy(ONLYOFFICE_ID);
+        setActiveFileName(defaultFileName);
+        setResourceRevision(state.revision);
+      }),
+    [defaultFileName],
+  );
 
   useEffect(() => {
     let unsubscribeLoading: (() => void) | undefined;
@@ -104,6 +129,7 @@ export function OfficePreviewPage({
     const init = async () => {
       editorManagerFactory.destroy(containerId);
       const loadSession = editorManagerFactory.beginLoadSession(containerId);
+      setEditorReady(false);
 
       let manager: OnlyOfficeManager;
 
@@ -149,6 +175,7 @@ export function OfficePreviewPage({
       setCurrentLangState(manager.getLanguage());
       setCurrentThemeState(manager.getTheme());
       setEditorReady(true);
+      setLoading(false);
       unsubscribeLoading = manager.onLoadingChange(({ loading: next }) => {
         setLoading(next);
       });
@@ -157,6 +184,7 @@ export function OfficePreviewPage({
     init().catch((err) => {
       if (disposed) return;
       setError("无法加载编辑器组件");
+      setLoading(false);
       console.error("Failed to initialize OnlyOffice:", err);
     });
 
@@ -169,7 +197,7 @@ export function OfficePreviewPage({
       setEditorReady(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [resourceRevision]);
 
   const runAction = async (action: () => Promise<void>, message: string) => {
     try {
@@ -223,21 +251,7 @@ export function OfficePreviewPage({
         throw new Error("Editor is not initialized");
       }
 
-      const binData = await manager.exportDocument();
-      const exportExt = getFileExtension(activeFileName, fileType.toLowerCase());
-      const result = await convertBinToDocument(
-        binData.binData,
-        binData.fileName || activeFileName,
-        exportExt.toUpperCase() as FileType,
-        binData.media,
-      );
-
-      downloadBlob(
-        new Blob([result.data as BlobPart], {
-          type: getOnlyOfficeMimeType(exportExt),
-        }),
-        result.fileName || activeFileName,
-      );
+      await manager.downloadExport();
     }, "导出失败");
 
   const handleToggleReadOnly = () =>
@@ -249,6 +263,13 @@ export function OfficePreviewPage({
       await manager.toggleReadOnly();
       setReadOnly(manager.getReadOnly());
     }, "切换模式失败");
+
+  const handleResourceLoad = () =>
+    runAction(async () => {
+      applyDemoResourceMode("cdn", cdnOrigin);
+    }, "切换资源失败");
+
+  const isDocxFile = getFileExtension(activeFileName, fileType) === "docx";
 
   return (
     <div
@@ -263,24 +284,6 @@ export function OfficePreviewPage({
           </div>
 
           <div className={demoToolbarClass}>
-            <DemoButton onClick={handleLanguageSwitch}>
-              {currentLang === ONLYOFFICE_LANG_KEY.ZH ? "中文" : "English"}
-            </DemoButton>
-            <DemoField label="主题">
-              <DemoSelect
-                value={currentTheme}
-                onChange={(event) =>
-                  handleThemeChange(event.target.value as OfficeTheme)
-                }
-                disabled={!editorReady}
-              >
-                {OFFICE_THEME_OPTIONS.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </DemoSelect>
-            </DemoField>
             <DemoButton onClick={() => fileInputRef.current?.click()}>
               上传
             </DemoButton>
@@ -295,6 +298,56 @@ export function OfficePreviewPage({
                 </DemoButton>
               </>
             )}
+            <DemoMenu label="更多" disabled={loading}>
+              <DemoMenuRow>
+                <ResourceSwitcher
+                  cdnOrigin={cdnOrigin}
+                  disabled={loading}
+                  onCdnOriginChange={setCdnOrigin}
+                  onLoad={handleResourceLoad}
+                />
+              </DemoMenuRow>
+              <DemoMenuRow>
+                <DemoButton onClick={handleLanguageSwitch}>
+                  {currentLang === ONLYOFFICE_LANG_KEY.ZH ? "中文" : "English"}
+                </DemoButton>
+                <DemoField label="主题">
+                  <DemoSelect
+                    value={currentTheme}
+                    onChange={(event) =>
+                      handleThemeChange(event.target.value as OfficeTheme)
+                    }
+                    disabled={!editorReady}
+                  >
+                    {OFFICE_THEME_OPTIONS.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </DemoSelect>
+                </DemoField>
+              </DemoMenuRow>
+              {isDocxFile && (
+                <>
+                  <DocxCommentsCrud
+                    disabled={!editorReady || loading || readOnly}
+                    getManager={() => managerRef.current}
+                    onError={(message, err) => {
+                      setError(message);
+                      console.error(message, err);
+                    }}
+                  />
+                  <DocxRevisionsCrud
+                    disabled={!editorReady || loading || readOnly}
+                    getManager={() => managerRef.current}
+                    onError={(message, err) => {
+                      setError(message);
+                      console.error(message, err);
+                    }}
+                  />
+                </>
+              )}
+            </DemoMenu>
           </div>
         </div>
       </header>

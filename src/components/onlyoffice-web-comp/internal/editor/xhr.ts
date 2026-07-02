@@ -7,6 +7,34 @@ export interface XHRProxyOptions {
   shouldBypass?: (url: string, method: string) => boolean;
 }
 
+function isForbiddenRequestHeader(name: string) {
+  const lowerName = name.toLowerCase();
+  return (
+    lowerName === "accept-charset" ||
+    lowerName === "accept-encoding" ||
+    lowerName === "access-control-request-headers" ||
+    lowerName === "access-control-request-method" ||
+    lowerName === "connection" ||
+    lowerName === "content-length" ||
+    lowerName === "cookie" ||
+    lowerName === "cookie2" ||
+    lowerName === "date" ||
+    lowerName === "dnt" ||
+    lowerName === "expect" ||
+    lowerName === "host" ||
+    lowerName === "keep-alive" ||
+    lowerName === "origin" ||
+    lowerName === "referer" ||
+    lowerName === "te" ||
+    lowerName === "trailer" ||
+    lowerName === "transfer-encoding" ||
+    lowerName === "upgrade" ||
+    lowerName === "via" ||
+    lowerName.startsWith("proxy-") ||
+    lowerName.startsWith("sec-")
+  );
+}
+
 /**
  * Creates an XMLHttpRequest proxy class that supports middleware
  * @param BaseXHR The original XMLHttpRequest class
@@ -24,6 +52,7 @@ export function createXHRProxy(
     private _requestUrl: string = "";
     private _requestHeaders: Headers = new Headers();
     private _requestBody: any = null;
+    private _responseHeaders: Headers = new Headers();
 
     /**
      * Register global middleware
@@ -59,6 +88,7 @@ export function createXHRProxy(
       this._requestMethod = method;
       this._requestUrl = normalizedUrl;
       this._requestHeaders = new Headers();
+      this._responseHeaders = new Headers();
       this._isMocked = false;
 
       // Call native open
@@ -72,12 +102,32 @@ export function createXHRProxy(
     }
 
     setRequestHeader(name: string, value: string): void {
+      if (isForbiddenRequestHeader(name)) {
+        return;
+      }
+
       this._requestHeaders.append(name, value);
 
       // If it is not a mock request, also set it on the native XHR
       if (!this._isMocked) {
         super.setRequestHeader(name, value);
       }
+    }
+
+    getResponseHeader(name: string): string | null {
+      if (this._isMocked) {
+        return this._responseHeaders.get(name);
+      }
+      return super.getResponseHeader(name);
+    }
+
+    getAllResponseHeaders(): string {
+      if (!this._isMocked) {
+        return super.getAllResponseHeaders();
+      }
+      return Array.from(this._responseHeaders.entries())
+        .map(([key, value]) => `${key}: ${value}`)
+        .join("\r\n");
     }
 
     send(body?: Document | XMLHttpRequestBodyInit | null): void {
@@ -144,8 +194,14 @@ export function createXHRProxy(
     }
 
     private async _handleMockResponse(response: Response) {
+      this._responseHeaders = new Headers(response.headers);
+
+      const emit = (event: Event) => {
+        this.dispatchEvent(event);
+      };
+
       // 1. Trigger loadstart
-      this.dispatchEvent(new ProgressEvent("loadstart"));
+      emit(new ProgressEvent("loadstart"));
 
       // 2. HEADERS_RECEIVED (readyState = 2)
       Object.defineProperty(this, "readyState", {
@@ -153,7 +209,7 @@ export function createXHRProxy(
         writable: false,
         configurable: true,
       });
-      this.dispatchEvent(new Event("readystatechange"));
+      emit(new Event("readystatechange"));
 
       // 3. LOADING (readyState = 3)
       Object.defineProperty(this, "readyState", {
@@ -161,7 +217,7 @@ export function createXHRProxy(
         writable: false,
         configurable: true,
       });
-      this.dispatchEvent(new Event("readystatechange"));
+      emit(new Event("readystatechange"));
 
       try {
         // Read response body
@@ -215,7 +271,7 @@ export function createXHRProxy(
         });
 
         // 4. Trigger progress event
-        this.dispatchEvent(
+        emit(
           new ProgressEvent("progress", {
             lengthComputable: true,
             loaded: 100,
@@ -229,13 +285,13 @@ export function createXHRProxy(
           writable: false,
           configurable: true,
         });
-        this.dispatchEvent(new Event("readystatechange"));
+        emit(new Event("readystatechange"));
 
         // 6. Trigger load event
-        this.dispatchEvent(new ProgressEvent("load"));
+        emit(new ProgressEvent("load"));
 
         // 7. Trigger loadend event
-        this.dispatchEvent(new ProgressEvent("loadend"));
+        emit(new ProgressEvent("loadend"));
       } catch (e) {
         console.error("ProxyXHR: error handling response", e);
 
@@ -245,11 +301,11 @@ export function createXHRProxy(
           writable: false,
           configurable: true,
         });
-        this.dispatchEvent(new Event("readystatechange"));
+        emit(new Event("readystatechange"));
 
         // Trigger error event
-        this.dispatchEvent(new ProgressEvent("error"));
-        this.dispatchEvent(new ProgressEvent("loadend"));
+        emit(new ProgressEvent("error"));
+        emit(new ProgressEvent("loadend"));
       }
     }
   };

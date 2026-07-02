@@ -9,6 +9,8 @@ import { nanoid } from "nanoid";
 import {
   DemoButton,
   DemoField,
+  DemoMenu,
+  DemoMenuRow,
   DemoSelect,
   demoHeaderClass,
   demoHeaderInnerClass,
@@ -16,6 +18,15 @@ import {
   demoTitleClass,
   demoToolbarClass,
 } from "./demo-toolbar";
+import { DocxCommentsCrud } from "./docx-comments-crud";
+import { DocxRevisionsCrud } from "./docx-revisions-crud";
+import { getFileExtension } from "./office-formats";
+import {
+  applyDemoResourceMode,
+  getDemoResourceState,
+  ResourceSwitcher,
+  subscribeDemoResourceChange,
+} from "./resource-switcher";
 import {
   DEFAULT_OFFICE_THEME,
   FILE_TYPE,
@@ -118,8 +129,24 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [theme, setTheme] = useState<OfficeTheme>(DEFAULT_OFFICE_THEME);
+  const [cdnOrigin, setCdnOrigin] = useState(
+    () => getDemoResourceState().cdnOrigin,
+  );
+  const [resourceRevision, setResourceRevision] = useState(0);
   const initializedRef = useRef(new Set<string>());
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(
+    () =>
+      subscribeDemoResourceChange((state) => {
+        setCdnOrigin(state.cdnOrigin);
+        setLoading(true);
+        onlyOfficeManagerFactory.destroyAll();
+        initializedRef.current.clear();
+        setResourceRevision(state.revision);
+      }),
+    [],
+  );
 
   useEffect(() => {
     const { tabs: initialTabs, activeId: initialActiveId } = createInitialTabState();
@@ -180,11 +207,14 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
         if (cancelled) {
           onlyOfficeManagerFactory.destroy(tab.containerId);
           initializedRef.current.delete(tab.id);
+          return;
         }
+        setLoading(false);
       })
       .catch((err) => {
         if (cancelled) return;
         setError("无法加载编辑器");
+        setLoading(false);
         console.error("Failed to open tab editor:", err);
       });
 
@@ -192,7 +222,7 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, tabs]);
+  }, [activeId, tabs, resourceRevision]);
 
   useEffect(() => {
     const handleLoadingChange = (data: { loading: boolean }) => {
@@ -348,6 +378,15 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
       );
     }, "切换主题失败");
 
+  const loadResource = () =>
+    runAction(async () => {
+      applyDemoResourceMode("cdn", cdnOrigin);
+    }, "切换资源失败");
+
+  const isActiveDocx = activeTab
+    ? getFileExtension(activeTab.fileName, activePreset?.fileType) === "docx"
+    : false;
+
   return (
     <div
       className={`flex flex-col bg-neutral-100 ${
@@ -366,20 +405,6 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
           </div>
 
           <div className={demoToolbarClass}>
-            <DemoField label="主题">
-              <DemoSelect
-                value={theme}
-                onChange={(event) =>
-                  applyTheme(event.target.value as OfficeTheme)
-                }
-              >
-                {OFFICE_THEME_OPTIONS.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </DemoSelect>
-            </DemoField>
             <DemoButton onClick={() => fileInputRef.current?.click()}>
               上传
             </DemoButton>
@@ -390,6 +415,52 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
             <DemoButton active={!!activeTab?.readOnly} onClick={toggleReadOnly}>
               {activeTab?.readOnly ? "只读" : "编辑"}
             </DemoButton>
+            <DemoMenu label="更多" disabled={loading}>
+              <DemoMenuRow>
+                <ResourceSwitcher
+                  cdnOrigin={cdnOrigin}
+                  disabled={loading}
+                  onCdnOriginChange={setCdnOrigin}
+                  onLoad={loadResource}
+                />
+              </DemoMenuRow>
+              <DemoMenuRow>
+                <DemoField label="主题">
+                  <DemoSelect
+                    value={theme}
+                    onChange={(event) =>
+                      applyTheme(event.target.value as OfficeTheme)
+                    }
+                  >
+                    {OFFICE_THEME_OPTIONS.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </DemoSelect>
+                </DemoField>
+              </DemoMenuRow>
+              {isActiveDocx && (
+                <>
+                  <DocxCommentsCrud
+                    disabled={loading || !!activeTab?.readOnly}
+                    getManager={ensureActiveManager}
+                    onError={(message, err) => {
+                      setError(message);
+                      console.error(message, err);
+                    }}
+                  />
+                  <DocxRevisionsCrud
+                    disabled={loading || !!activeTab?.readOnly}
+                    getManager={ensureActiveManager}
+                    onError={(message, err) => {
+                      setError(message);
+                      console.error(message, err);
+                    }}
+                  />
+                </>
+              )}
+            </DemoMenu>
           </div>
         </div>
 

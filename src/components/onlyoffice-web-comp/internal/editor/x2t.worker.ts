@@ -6,7 +6,7 @@ import {
   fetchMaybeBrotliAsset,
   fetchMaybeBrotliScript,
 } from "./fetch-brotli";
-import { getX2tBaseUrl, resolveSiteUrl, STATIC_RESOURCE } from "../../const";
+import { getStaticResource, resolveSiteUrl } from "../../const";
 
 /**
  * X2T Converter Web Worker
@@ -19,10 +19,10 @@ import { getX2tBaseUrl, resolveSiteUrl, STATIC_RESOURCE } from "../../const";
 
 // Worker 内用 origin 拼绝对 URL（见 STATIC_RESOURCE.x2t）
 const X2T_ORIGIN = self.location.origin;
-const X2T_BASE_URL = getX2tBaseUrl(X2T_ORIGIN);
 
 let x2t: any = null;
 let initPromise: Promise<void> | null = null;
+let initResourceKey = "";
 
 const crcTable = (() => {
   const table = new Uint32Array(256);
@@ -439,11 +439,17 @@ function executeEmscriptenScript(scriptSource: string): void {
 /**
  * Initialize x2t module in Worker context
  */
-async function initX2t(): Promise<void> {
+function getWorkerStaticResource(params?: X2tConvertParams) {
+  return params?.staticResource ?? getStaticResource();
+}
+
+async function initX2t(params?: X2tConvertParams): Promise<void> {
   if (x2t) return;
 
-  const scriptUrl = resolveSiteUrl(X2T_ORIGIN, STATIC_RESOURCE.x2t.script);
-  const wasmUrl = resolveSiteUrl(X2T_ORIGIN, STATIC_RESOURCE.x2t.wasm);
+  const staticResource = getWorkerStaticResource(params);
+  const x2tBaseUrl = resolveSiteUrl(X2T_ORIGIN, `${staticResource.x2t.root}/`);
+  const scriptUrl = resolveSiteUrl(X2T_ORIGIN, staticResource.x2t.script);
+  const wasmUrl = resolveSiteUrl(X2T_ORIGIN, staticResource.x2t.wasm);
 
   const [scriptSource, wasmBinary] = await Promise.all([
     fetchMaybeBrotliScript(scriptUrl),
@@ -451,7 +457,7 @@ async function initX2t(): Promise<void> {
   ]);
 
   Object.assign(self, {
-    __filename: X2T_BASE_URL,
+    __filename: x2tBaseUrl,
     wasmBinary,
   });
 
@@ -481,17 +487,18 @@ async function initX2t(): Promise<void> {
 /**
  * Ensure x2t is initialized before conversion
  */
-async function ensureInit(): Promise<void> {
+async function ensureInit(params?: X2tConvertParams): Promise<void> {
+  const staticResource = getWorkerStaticResource(params);
+  const resourceKey = JSON.stringify(staticResource.x2t);
+  if (x2t && initResourceKey && initResourceKey !== resourceKey) {
+    throw new Error("x2t static resource changed after worker initialization");
+  }
+  initResourceKey = resourceKey;
   if (!initPromise) {
-    initPromise = initX2t();
+    initPromise = initX2t(params);
   }
   return initPromise;
 }
-
-// Auto-initialize on worker creation
-ensureInit().catch((err) => {
-  console.error("[x2t.worker] Auto-init failed:", err);
-});
 
 /**
  * Clean up temporary files after conversion
@@ -673,6 +680,7 @@ async function convert({
   csvEncoding,
   csvDelimiter,
   csvDelimiterChar,
+  staticResource,
 }: X2tConvertParams): Promise<X2tConvertResult> {
   let preparedData = data;
   if (preparedData) {
@@ -693,7 +701,13 @@ async function convert({
 
   let allFonts = fonts;
   if (needsPdfFonts) {
-    const pdfFonts = await loadX2tPdfFonts(self.location.origin);
+    const pdfFontsRoot = getWorkerStaticResource({
+      staticResource,
+    } as X2tConvertParams).x2t.pdfFonts.root;
+    const pdfFonts = await loadX2tPdfFonts(
+      self.location.origin,
+      pdfFontsRoot,
+    );
     allFonts = { ...pdfFonts, ...fonts };
   }
 
@@ -718,15 +732,25 @@ async function convert({
     formatFrom == AvsFileType.AVS_FILE_DOCUMENT_DOC
   ) {
     const viaPath = fromPath + ".docx";
+    try {
+      const pathInfo = x2t.FS.analyzePath(viaPath);
+      if (pathInfo.exists) {
+        x2t.FS.unlink(viaPath);
+      }
+    } catch (err) {}
     writeInputs({
       fileFrom: fromPath,
       fileTo: viaPath,
+      formatFrom: AvsFileType.AVS_FILE_DOCUMENT_DOC,
+      formatTo: AvsFileType.AVS_FILE_DOCUMENT_DOCX,
       data: null as never,
     });
     x2t.ccall("main1", ["number"], ["string"], [xmlPath]);
     writeInputs({
       fileFrom: viaPath,
       fileTo: toPath,
+      formatFrom: AvsFileType.AVS_FILE_DOCUMENT_DOCX,
+      formatTo,
       data: null as never,
     });
     files.push(viaPath);
@@ -807,7 +831,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
     switch (type) {
       case "convert": {
         // Ensure x2t is initialized before conversion
-        await ensureInit();
+        await ensureInit(payload);
         const result = await convert(payload);
 
         // Use Transferable objects for zero-copy transfer

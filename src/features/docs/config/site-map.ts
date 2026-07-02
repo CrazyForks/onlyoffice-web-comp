@@ -140,10 +140,12 @@ export function getDocsNav(): DocsNavGroup[] {
     if (section.id === "demo") {
       return {
         title: section.title,
-        items: DEMO_TABS.map((tab) => ({
-          href: tab.href,
-          label: tab.label,
-        })),
+        items: [
+          ...DEMO_TABS.map((tab) => ({
+            href: tab.href,
+            label: tab.label,
+          })),
+        ],
       };
     }
 

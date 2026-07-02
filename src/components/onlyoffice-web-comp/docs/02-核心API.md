@@ -43,6 +43,48 @@ const manager = await OnlyOfficeManager.createWithFile(
 );
 ```
 
+### 静态资源地址运行时注册
+
+OnlyOffice SDK、x2t、PDF 字体等静态资源默认从 `public/packages` 加载。需要在运行时切到 CDN 或独立静态服务器时，可在创建编辑器前注册资源地址。
+
+```typescript
+import {
+  FILE_TYPE,
+  OnlyOfficeManager,
+  getStaticResource,
+  isOnlyOfficeCdnMode,
+} from "@/components/onlyoffice-web-comp";
+
+// packages 根地址，目录下应包含 onlyoffice/{version}/...
+OnlyOfficeManager.registerStaticResource({
+  cdnOrigin: "https://4772962c.onlyoffice-packages.pages.dev",
+});
+
+const resource = getStaticResource();
+console.log(resource.onlyoffice.apiUrl);
+console.log(resource.x2t.script);
+console.log(isOnlyOfficeCdnMode());
+
+const manager = await OnlyOfficeManager.create({
+  fileType: FILE_TYPE.DOCX,
+  defaultFileName: "New_Document.docx",
+});
+
+// 恢复默认 public/packages 配置
+OnlyOfficeManager.resetStaticResource();
+```
+
+`registerStaticResource` 支持以下参数：
+
+```typescript
+type OnlyOfficeStaticResourceOptions = {
+  /** CDN packages 根地址，例如 https://4772962c.onlyoffice-packages.pages.dev */
+  cdnOrigin?: string | null;
+};
+```
+
+运行时切换已有实例时，需要先销毁旧实例，再注册新地址并重新创建编辑器。DocsAPI script、preload iframe、x2t worker 都会按新的静态资源地址重新初始化。
+
 ### 实例方法
 
 | 方法 | 说明 |

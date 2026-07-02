@@ -408,8 +408,17 @@ function checkExtendedPDF(directUrl,key,url,token,callback){var limit=300;if(dir
 </script>
     <script>
         function startApp() {
+            var bridgeScript = document.createElement("script");
             var script = document.createElement("script");
+            bridgeScript.src = "../../../vendor/onlyoffice-cross-origin-bridge.js";
             script.src = "../../../vendor/requirejs/require.js";
+
+            var appendRequireScript = function() {
+                document.body.appendChild(script);
+            };
+            bridgeScript.onload = appendRequireScript;
+            bridgeScript.onerror = appendRequireScript;
+            document.body.appendChild(bridgeScript);
 
             if (isIEBrowser === true) {
                 (document.write('<script src="../../common/main/lib/util/fix-ie-compat.js"><\/script>'),
@@ -417,11 +426,9 @@ function checkExtendedPDF(directUrl,key,url,token,callback){var limit=300;if(dir
 
                 setTimeout(function(){
                     script.setAttribute("data-main", "ie/app");
-                    document.body.appendChild(script);
                 },0);
             } else {
                 script.setAttribute("data-main", "app");
-                document.body.appendChild(script);
             }
         }
         if (isForm===undefined) {
