@@ -5,6 +5,8 @@ import {
   Participant,
   AscSaveTypes,
   ServerOptions,
+  OfficeXmlSizeLimitExceededError,
+  isOfficeXmlSizeLimitExceededError,
 } from "./types";
 import { emptyDocx, emptyPdf, emptyPptx, emptyXlsx } from "./empty";
 import { convertCsvBufferToXlsxBuffer } from "./csv-to-xlsx";
@@ -22,9 +24,14 @@ import {
   normalizeX2tExportFileType,
 } from "./utils";
 import { getOnlyOfficeMimeType } from "../../util/document-file";
-import { isOnlyOfficeCdnMode } from "../../const";
+import {
+  OFFICE_XML_EVENT_CONFIG,
+  isOnlyOfficeCdnMode,
+  type OfficeXmlEventConfig,
+} from "../../const";
 import { allPlugins, featuredPlugins, getPluginsData } from "./plugins";
 import {
+  getZipXmlUncompressedSize,
   readZipEntries,
   readZipEntryData,
   writeZipEntries,
@@ -46,7 +53,6 @@ import {
  * fVg=true 时走 asc_onDownloadUrl，父页 onDownloadAs 为空实现，不会触发浏览器下载。
  */
 const PROGRAMMATIC_EXPORT_ACK_URL = "onlyoffice://export/ack";
-
 function mergeBuffers(buffers: Uint8Array[]) {
   const totalLength = buffers.reduce((acc, buffer) => acc + buffer.length, 0);
   const mergedBuffer = new Uint8Array(totalLength);
@@ -76,6 +82,12 @@ function isPdfBytes(data: Uint8Array) {
     data[2] === 0x44 &&
     data[3] === 0x46 &&
     data[4] === 0x2d
+  );
+}
+
+function isOfficeZipFileType(fileType: string) {
+  return /^(docx|docm|dotx|dotm|xlsx|xlsm|xltx|xltm|pptx|pptm|potx|potm|ppsx|ppsm)$/i.test(
+    getFileExt(fileType),
   );
 }
 
@@ -517,6 +529,7 @@ export class EditorServer {
   private participants: Participant[] = [];
   private syncChangesIndex = 0;
   private loadPromise: Promise<void> | null = null;
+  private loadBlocked = false;
 
   private file: File | null = null;
   private fileType: string = "docx";
@@ -544,11 +557,44 @@ export class EditorServer {
     | null = null;
 
   private options: ServerOptions = {};
+  private officeXmlEventConfig: Required<OfficeXmlEventConfig> = {
+    ...OFFICE_XML_EVENT_CONFIG.default,
+  };
 
   constructor(options: ServerOptions = {}) {
     this.options = options;
     this.handleConnect = this.handleConnect.bind(this);
     this.handleMessage = this.handleMessage.bind(this);
+  }
+
+  setOfficeXmlEventConfig(config?: OfficeXmlEventConfig) {
+    this.officeXmlEventConfig = {
+      ...OFFICE_XML_EVENT_CONFIG.default,
+      ...config,
+    };
+  }
+
+  private createLoadPromise(
+    buffer: ArrayBuffer | (() => Promise<ArrayBuffer>),
+    fileType: string,
+  ) {
+    return this.loadDocument(buffer, fileType).catch((err) => {
+      const error = err instanceof Error ? err : new Error(String(err));
+      this.notifyLoadError(error);
+      if (isOfficeXmlSizeLimitExceededError(error)) {
+        this.loadBlocked = true;
+        return;
+      }
+      throw error;
+    });
+  }
+
+  private notifyLoadError(error: Error) {
+    try {
+      this.options.onLoadError?.(error);
+    } catch (callbackError) {
+      console.error("[EditorServer] onLoadError callback failed", callbackError);
+    }
   }
 
   /** CDN iframe 与主站跨域：Editor.bin 必须用相对 /cache/files/，由 bridge 代拉。 */
@@ -592,6 +638,7 @@ export class EditorServer {
     this.fsMap.clear();
     this.urlsMap.clear();
     this.loadPromise = null;
+    this.loadBlocked = false;
     this.downloadId = "";
     this.downloadParts = [];
     this.downloadCmd = null;
@@ -612,7 +659,21 @@ export class EditorServer {
     this.file = file;
     this.title = title;
     const buffer = await file.arrayBuffer();
-    this.loadPromise = this.loadDocument(buffer, this.fileType);
+    const sizeLimitError = this.getOfficeXmlSizeLimitError(
+      buffer,
+      this.fileType,
+    );
+    if (sizeLimitError) {
+      this.loadBlocked = true;
+      this.loadPromise = Promise.resolve();
+      this.notifyLoadError(sizeLimitError);
+      return {
+        id: this.id,
+        documentType,
+      };
+    }
+
+    this.loadPromise = this.createLoadPromise(buffer, this.fileType);
 
     return {
       id: this.id,
@@ -651,6 +712,7 @@ export class EditorServer {
 
     this.fsMap.set("Editor.bin", binData);
     this.setEditorBinUrl(binData);
+    this.loadBlocked = false;
 
     return {
       id: this.id,
@@ -675,8 +737,9 @@ export class EditorServer {
     this.fileType = fileType || getFileExt(rawTitle) || "docx";
     const documentType = getDocumentType(this.fileType);
     this.id = randomId();
+    this.loadBlocked = false;
     this.title = ensureTitleWithExtension(rawTitle, this.fileType);
-    this.loadPromise = this.loadDocument(() => loader(url), this.fileType);
+    this.loadPromise = this.createLoadPromise(() => loader(url), this.fileType);
 
     return {
       id: this.id,
@@ -884,6 +947,7 @@ export class EditorServer {
   }
 
   private async convertBufferToEditorBin(buffer: ArrayBuffer, fileType: string) {
+    this.assertOfficeXmlSizeWithinLimit(buffer, fileType);
     buffer = await this.rewriteUnsupportedPptxImages(buffer, fileType);
     const { formatFrom, formatTo } = getX2tConvertFormats(fileType);
     const result = await converter.convert({
@@ -898,6 +962,43 @@ export class EditorServer {
       media: result.media,
       themes: result.themes ?? {},
     };
+  }
+
+  private assertOfficeXmlSizeWithinLimit(buffer: ArrayBuffer, fileType: string) {
+    const error = this.getOfficeXmlSizeLimitError(buffer, fileType);
+    if (error) {
+      throw error;
+    }
+  }
+
+  private getOfficeXmlSizeLimitError(buffer: ArrayBuffer, fileType: string) {
+    if (!this.officeXmlEventConfig.isEnable) {
+      return null;
+    }
+
+    if (!isOfficeZipFileType(fileType)) {
+      return null;
+    }
+
+    const entries = readZipEntries(buffer);
+    if (!entries) {
+      return null;
+    }
+
+    const { totalSize, entryCount } = getZipXmlUncompressedSize(entries);
+    console.log("onlyoffice-totalSize:", `${(totalSize / 1024 / 1024).toFixed(2)} MB`);
+    if (totalSize <= this.officeXmlEventConfig.limitBytes) {
+      return null;
+    }
+
+    return new OfficeXmlSizeLimitExceededError({
+      fileName: this.title || `Document.${getFileExt(fileType) || fileType}`,
+      fileType: getFileExt(fileType) || fileType,
+      errorDescription: "文件过大，不支持解析",
+      xmlBytes: totalSize,
+      limitBytes: this.officeXmlEventConfig.limitBytes,
+      entryCount,
+    });
   }
 
   private async rewriteUnsupportedPptxImages(
@@ -1449,6 +1550,9 @@ export class EditorServer {
           if (this.loadPromise) {
             await this.loadPromise;
           }
+          if (this.loadBlocked) {
+            break;
+          }
           send({
             type: "documentOpen",
             data: {
@@ -1461,12 +1565,19 @@ export class EditorServer {
           });
         } catch (err) {
           console.error(err);
+          const message = err instanceof Error ? err.message : String(err);
+          if (isOfficeXmlSizeLimitExceededError(err)) {
+            break;
+          }
           send({
             type: "documentOpen",
             data: {
               type: "open",
               status: "err",
-              data: err instanceof Error ? err.message : String(err),
+              data: {
+                error: message,
+                message,
+              },
             },
           });
         }

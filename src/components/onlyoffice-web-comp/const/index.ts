@@ -18,6 +18,7 @@ export const ONLYOFFICE_EVENT_KEYS = {
   DOCUMENT_READY: "documentReady",
   LOADING_CHANGE: "loadingChange",
   ONSAVE: "onSave",
+  OFFICE_XML_SIZE_LIMIT_EXCEEDED: "officeXmlSizeLimitExceeded",
 } as const;
 
 export type OnlyOfficeEventKey =
@@ -58,6 +59,19 @@ export const OFFICE_THEME_OPTIONS: ReadonlyArray<{
 
 /** 只读 ↔ 编辑切换时，loading 最少展示时长（ms） */
 export const READONLY_SWITCH_MIN_DELAY_MS = 200;
+
+export type OfficeXmlEventConfig = {
+  isEnable?: boolean;
+  limitBytes?: number;
+};
+
+/** Office ZIP 内 XML 包内容解压后大小限制；超过时会在 x2t 转换前拦截。 */
+export const OFFICE_XML_EVENT_CONFIG = {
+  default: {
+    isEnable: false,
+    limitBytes: 1024 * 1024 * 2048,
+  },
+} as const satisfies { default: Required<OfficeXmlEventConfig> };
 
 /** Asc.c_oAscRestrictionType（sdk-all-min.js: k.Mf / k.Hca） */
 export const ASC_RESTRICTION_NONE = 0;

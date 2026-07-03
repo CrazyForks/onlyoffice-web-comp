@@ -91,6 +91,7 @@ type OnlyOfficeManagerOptions = {
   readOnly?: boolean;
   lang?: OnlyOfficeLang;
   theme?: OfficeTheme;
+  officeXmlEvent?: OfficeXmlEventConfig;
 };
 ```
 
@@ -102,8 +103,20 @@ type OpenDocumentInput = {
   file?: File;
   isNew?: boolean;
   readOnly?: boolean;
+  officeXmlEvent?: OfficeXmlEventConfig;
 };
 ```
+
+### `OfficeXmlEventConfig`
+
+```typescript
+type OfficeXmlEventConfig = {
+  isEnable?: boolean;   // 默认 false
+  limitBytes?: number;  // 默认 2GB
+};
+```
+
+`OFFICE_XML_EVENT_CONFIG.default` 为默认配置。开启后，打开 Office ZIP 文件前会统计 `.xml` / `.rels` 的解压后总大小，超过阈值时触发 `OFFICE_XML_SIZE_LIMIT_EXCEEDED` 事件并显示默认错误层。
 
 ### `DocumentReadyData`
 

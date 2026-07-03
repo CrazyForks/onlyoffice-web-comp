@@ -24,6 +24,8 @@ import io, { type MockSocketOptions } from "../internal/editor/socket";
 import {
   type DocEditor,
   DocumentType,
+  isOfficeXmlSizeLimitExceededError,
+  type OfficeXmlSizeLimitExceededPayload,
   type OfficeTheme,
   type PluginMode,
   type User,
@@ -38,6 +40,7 @@ import {
   ASC_RESTRICTION_NONE,
   ASC_RESTRICTION_VIEW,
   OFFICE_EDITOR_LOGO,
+  type OfficeXmlEventConfig,
 } from "../const";
 import {
   type CommentChangeHandlers,
@@ -61,6 +64,10 @@ import {
 } from "../feature/revisions";
 import { getOnlyOfficeLang, type OnlyOfficeLang } from "../store/lang";
 import { initializeOnlyOffice } from "../util/initialize";
+import {
+  removeOfficeXmlSizeLimitOverlay,
+  showOfficeXmlSizeLimitOverlay,
+} from "../internal/ui/office-xml-size-limit-overlay";
 
 export type CreateEditorViewOptions = {
   isNew: boolean;
@@ -81,6 +88,7 @@ export type CreateEditorViewOptions = {
   loadSession?: number;
   /** 修订审阅页：开启 markup 显示与页边修订气泡 */
   revisionReview?: boolean;
+  officeXmlEvent?: OfficeXmlEventConfig;
 };
 
 let instanceIndex = 0;
@@ -182,6 +190,9 @@ export class EditorManager {
   private wordContentSyncPromise: Promise<void> | null = null;
   private wordContentSyncTeardown: (() => void) | null = null;
   private crossOriginBridgeTeardown: (() => void) | null = null;
+  private officeXmlSizeLimitOverlayTeardown: (() => void) | null = null;
+  private officeXmlSizeLimitPayload: OfficeXmlSizeLimitExceededPayload | null =
+    null;
 
   constructor(containerId = ONLYOFFICE_ID) {
     this.containerId = containerId;
@@ -191,7 +202,74 @@ export class EditorManager {
         this.dirty = false;
         this.notifyUserSave(snapshot);
       },
+      onLoadError: (error) => {
+        this.handleServerLoadError(error);
+      },
     });
+  }
+
+  private getContainerElement() {
+    return document.getElementById(this.containerId);
+  }
+
+  private getOfficeOverlayHostElement() {
+    const container = this.getContainerElement();
+    return (
+      container?.closest<HTMLElement>(
+        ONLYOFFICE_CONTAINER_CONFIG.PARENT_SELECTOR,
+      ) ?? container
+    );
+  }
+
+  private clearOfficeXmlSizeLimitOverlay() {
+    this.officeXmlSizeLimitOverlayTeardown?.();
+    this.officeXmlSizeLimitOverlayTeardown = null;
+    this.officeXmlSizeLimitPayload = null;
+    const container = this.getOfficeOverlayHostElement();
+    if (container) {
+      removeOfficeXmlSizeLimitOverlay(container);
+    }
+  }
+
+  private renderOfficeXmlSizeLimitOverlay() {
+    if (!this.officeXmlSizeLimitPayload) {
+      return;
+    }
+
+    const container = this.getOfficeOverlayHostElement();
+    if (container) {
+      this.officeXmlSizeLimitOverlayTeardown = showOfficeXmlSizeLimitOverlay(
+        container,
+        this.officeXmlSizeLimitPayload,
+      );
+    }
+  }
+
+  private handleServerLoadError(error: Error) {
+    if (!isOfficeXmlSizeLimitExceededError(error)) {
+      return;
+    }
+
+    this.officeXmlSizeLimitPayload = error.payload;
+    this.renderOfficeXmlSizeLimitOverlay();
+
+    const data = {
+      ...error.payload,
+      instanceId: this.instanceId,
+      containerId: this.containerId,
+    };
+
+    try {
+      onlyofficeEventbus.emit(
+        ONLYOFFICE_EVENT_KEYS.OFFICE_XML_SIZE_LIMIT_EXCEEDED,
+        data,
+      );
+    } catch (eventError) {
+      console.error(
+        "[EditorManager] officeXmlSizeLimitExceeded handler failed",
+        eventError,
+      );
+    }
   }
 
   private createScopedIo() {
@@ -1461,6 +1539,7 @@ export class EditorManager {
     this.plugins = options.plugins || "featured";
     this.readOnly = !!options.readOnly;
     this.revisionReviewMode = !!options.revisionReview;
+    this.server.setOfficeXmlEventConfig(options.officeXmlEvent);
     if (options.user) {
       this.server.setUser(options.user);
     }
@@ -1472,6 +1551,7 @@ export class EditorManager {
     this.media = {};
     this.comments.clear();
     this.revisions = [];
+    this.clearOfficeXmlSizeLimitOverlay();
     this.teardownWordContentSync();
 
     if (options.isNew) {
@@ -1491,6 +1571,11 @@ export class EditorManager {
       throw new Error("OnlyOffice requires a file, url, or new document type");
     }
 
+    if (this.officeXmlSizeLimitPayload) {
+      this.renderOfficeXmlSizeLimitOverlay();
+      return this;
+    }
+
     if (!this.isLoadSessionActive(containerId, options.loadSession)) {
       return this;
     }
@@ -1507,6 +1592,7 @@ export class EditorManager {
 
     this.syncEditorBridge();
     this.mountDocEditor();
+    this.renderOfficeXmlSizeLimitOverlay();
 
     return this;
   }
@@ -1634,6 +1720,10 @@ export class EditorManager {
 
   getInstanceId() {
     return this.instanceId;
+  }
+
+  isOfficeXmlSizeLimitExceeded() {
+    return !!this.officeXmlSizeLimitPayload;
   }
 
   getContainerId() {
@@ -2311,6 +2401,7 @@ export class EditorManager {
     this.teardownWordContentSync();
     this.crossOriginBridgeTeardown?.();
     this.crossOriginBridgeTeardown = null;
+    this.clearOfficeXmlSizeLimitOverlay();
     unregisterScopedIo(this.containerId);
     unregisterCrossOriginBridge(this.containerId);
     this.editor?.destroyEditor?.();

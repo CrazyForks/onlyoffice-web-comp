@@ -1,5 +1,6 @@
 import { EventEmitter, type EventListener } from "../util/event-emitter";
 import { ONLYOFFICE_EVENT_KEYS } from "../const";
+import type { OfficeXmlSizeLimitExceededPayload } from "../internal/editor/types";
 
 export type DocumentReadyData = {
   fileName: string;
@@ -25,11 +26,18 @@ export type LoadingChangeData = {
   loading: boolean;
 };
 
+export type OfficeXmlSizeLimitExceededData =
+  OfficeXmlSizeLimitExceededPayload & {
+    instanceId: string;
+    containerId: string;
+  };
+
 type OnlyOfficeEventPayloads = {
   [ONLYOFFICE_EVENT_KEYS.DOCUMENT_READY]: DocumentReadyData;
   [ONLYOFFICE_EVENT_KEYS.SAVE_DOCUMENT]: SaveDocumentData;
   [ONLYOFFICE_EVENT_KEYS.LOADING_CHANGE]: LoadingChangeData;
   [ONLYOFFICE_EVENT_KEYS.ONSAVE]: OnSaveData;
+  [ONLYOFFICE_EVENT_KEYS.OFFICE_XML_SIZE_LIMIT_EXCEEDED]: OfficeXmlSizeLimitExceededData;
 };
 
 class OnlyOfficeEventBus {

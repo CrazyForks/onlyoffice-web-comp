@@ -9,6 +9,7 @@ import {
   ONLYOFFICE_CONTAINER_CONFIG,
   ONLYOFFICE_ID,
   ONLYOFFICE_LANG_KEY,
+  OFFICE_XML_EVENT_CONFIG,
   OFFICE_THEME_OPTIONS,
   DEFAULT_OFFICE_THEME,
   OnlyOfficeManager,
@@ -99,6 +100,12 @@ export function OfficePreviewPage({
   const [currentTheme, setCurrentThemeState] = useState<OfficeTheme>(
     DEFAULT_OFFICE_THEME,
   );
+  const [officeXmlEventEnabled, setOfficeXmlEventEnabled] = useState<boolean>(
+    OFFICE_XML_EVENT_CONFIG.default.isEnable,
+  );
+  const [officeXmlLimitMb, setOfficeXmlLimitMb] = useState(
+    Math.round(OFFICE_XML_EVENT_CONFIG.default.limitBytes / 1024 / 1024),
+  );
   const [editorReady, setEditorReady] = useState(false);
   const [activeFileName, setActiveFileName] = useState(defaultFileName);
   const [cdnOrigin, setCdnOrigin] = useState(
@@ -130,6 +137,10 @@ export function OfficePreviewPage({
       editorManagerFactory.destroy(containerId);
       const loadSession = editorManagerFactory.beginLoadSession(containerId);
       setEditorReady(false);
+      const officeXmlEvent = {
+        isEnable: officeXmlEventEnabled,
+        limitBytes: officeXmlLimitMb * 1024 * 1024,
+      };
 
       let manager: OnlyOfficeManager;
 
@@ -145,6 +156,7 @@ export function OfficePreviewPage({
             readOnly,
             theme: currentTheme,
             loadSession,
+            officeXmlEvent,
           },
           file,
         );
@@ -156,6 +168,7 @@ export function OfficePreviewPage({
           readOnly,
           theme: currentTheme,
           loadSession,
+          officeXmlEvent,
           user: {
             id: "uid",
             name: "demo-user",
@@ -219,7 +232,15 @@ export function OfficePreviewPage({
       if (!manager) {
         throw new Error("Editor is not initialized");
       }
-      await manager.openDocument({ fileName, file, readOnly: nextReadOnly });
+      await manager.openDocument({
+        fileName,
+        file,
+        readOnly: nextReadOnly,
+        officeXmlEvent: {
+          isEnable: officeXmlEventEnabled,
+          limitBytes: officeXmlLimitMb * 1024 * 1024,
+        },
+      });
       setActiveFileName(fileName);
       setReadOnly(nextReadOnly);
     }, "操作失败");
@@ -325,6 +346,32 @@ export function OfficePreviewPage({
                       </option>
                     ))}
                   </DemoSelect>
+                </DemoField>
+              </DemoMenuRow>
+              <DemoMenuRow>
+                <DemoField label="XML 检测">
+                  <input
+                    type="checkbox"
+                    checked={officeXmlEventEnabled}
+                    onChange={(event) =>
+                      setOfficeXmlEventEnabled(event.target.checked)
+                    }
+                    className="h-4 w-4"
+                  />
+                </DemoField>
+                <DemoField label="阈值 MB">
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={officeXmlLimitMb}
+                    onChange={(event) =>
+                      setOfficeXmlLimitMb(
+                        Math.max(1, Number(event.target.value) || 1),
+                      )
+                    }
+                    className="h-6 w-20 border-0 bg-transparent py-0 pl-0.5 text-[13px] text-neutral-800 outline-none"
+                  />
                 </DemoField>
               </DemoMenuRow>
               {isDocxFile && (

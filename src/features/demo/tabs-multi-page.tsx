@@ -32,6 +32,7 @@ import {
   FILE_TYPE,
   ONLYOFFICE_CONTAINER_CONFIG,
   ONLYOFFICE_EVENT_KEYS,
+  OFFICE_XML_EVENT_CONFIG,
   OFFICE_THEME_OPTIONS,
   onlyOfficeManagerFactory,
   onlyofficeEventbus,
@@ -129,6 +130,12 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [theme, setTheme] = useState<OfficeTheme>(DEFAULT_OFFICE_THEME);
+  const [officeXmlEventEnabled, setOfficeXmlEventEnabled] = useState<boolean>(
+    OFFICE_XML_EVENT_CONFIG.default.isEnable,
+  );
+  const [officeXmlLimitMb, setOfficeXmlLimitMb] = useState(
+    Math.round(OFFICE_XML_EVENT_CONFIG.default.limitBytes / 1024 / 1024),
+  );
   const [cdnOrigin, setCdnOrigin] = useState(
     () => getDemoResourceState().cdnOrigin,
   );
@@ -163,6 +170,11 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
     );
   };
 
+  const getOfficeXmlEventConfig = () => ({
+    isEnable: officeXmlEventEnabled,
+    limitBytes: officeXmlLimitMb * 1024 * 1024,
+  });
+
   const runAction = async (action: () => Promise<void>, message: string) => {
     try {
       setError(null);
@@ -183,6 +195,7 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
         defaultFileName: preset.defaultFileName,
         readOnly: tab.readOnly,
         theme,
+        officeXmlEvent: getOfficeXmlEventConfig(),
       },
       {
         fileName: tab.fileName,
@@ -289,6 +302,7 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
           defaultFileName: preset.defaultFileName,
           readOnly: activeTab.readOnly,
           theme,
+          officeXmlEvent: getOfficeXmlEventConfig(),
         },
         {
           fileName: file.name,
@@ -314,6 +328,7 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
           defaultFileName: preset.defaultFileName,
           readOnly: activeTab.readOnly,
           theme,
+          officeXmlEvent: getOfficeXmlEventConfig(),
         },
         {
           fileName: preset.defaultFileName,
@@ -350,6 +365,7 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
             defaultFileName: preset.defaultFileName,
             readOnly: nextReadOnly,
             theme,
+            officeXmlEvent: getOfficeXmlEventConfig(),
           },
           {
             fileName: activeTab.fileName,
@@ -438,6 +454,32 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
                       </option>
                     ))}
                   </DemoSelect>
+                </DemoField>
+              </DemoMenuRow>
+              <DemoMenuRow>
+                <DemoField label="XML 检测">
+                  <input
+                    type="checkbox"
+                    checked={officeXmlEventEnabled}
+                    onChange={(event) =>
+                      setOfficeXmlEventEnabled(event.target.checked)
+                    }
+                    className="h-4 w-4"
+                  />
+                </DemoField>
+                <DemoField label="阈值 MB">
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={officeXmlLimitMb}
+                    onChange={(event) =>
+                      setOfficeXmlLimitMb(
+                        Math.max(1, Number(event.target.value) || 1),
+                      )
+                    }
+                    className="h-6 w-20 border-0 bg-transparent py-0 pl-0.5 text-[13px] text-neutral-800 outline-none"
+                  />
                 </DemoField>
               </DemoMenuRow>
               {isActiveDocx && (

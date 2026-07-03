@@ -2,13 +2,13 @@
 
 [← 快速开始](./01-快速开始.md) | [事件系统 →](./03-事件系统.md)
 
-## `OnlyOfficeManager`
+## 业务门面
 
-面向业务页面的门面，收敛初始化、开文档、导出、只读、语言、主题等调用。
+`OnlyOfficeManager` 面向业务页面，收敛初始化、开文档、导出、只读、语言、主题等调用。
 
-### `OnlyOfficeManager.create(options)`
+### 创建空白文档
 
-加载 DocsAPI 并以 `defaultFileName` 新建空白文档。
+调用 `OnlyOfficeManager.create(options)` 加载 DocsAPI，并以 `defaultFileName` 新建空白文档。
 
 ```typescript
 import {
@@ -28,9 +28,9 @@ const manager = await OnlyOfficeManager.create({
 });
 ```
 
-### `OnlyOfficeManager.createWithFile(options, file)`
+### 打开本地文件
 
-先拿到 `File`，再一次性挂载编辑器（不会先打开空白文档）。
+调用 `OnlyOfficeManager.createWithFile(options, file)`，先拿到 `File`，再一次性挂载编辑器（不会先打开空白文档）。
 
 ```typescript
 const manager = await OnlyOfficeManager.createWithFile(
@@ -138,7 +138,7 @@ OFFICE_THEME_OPTIONS.map(({ id, label }) => (
 
 可用主题常量见 [05 - API 参考 · OFFICE_THEME](./05-API参考.md#office_theme)。
 
-### `OpenDocumentInput`
+### 打开文档参数
 
 ```typescript
 type OpenDocumentInput = {
@@ -149,9 +149,9 @@ type OpenDocumentInput = {
 };
 ```
 
-## `onlyOfficeManagerFactory`
+## 多实例管理
 
-多容器场景按 `containerId` 缓存 `OnlyOfficeManager` 门面。
+`OnlyOfficeManagerFactory` 用于多容器场景，按 `containerId` 缓存 `OnlyOfficeManager` 门面。组件导出的单例为 `onlyOfficeManagerFactory`。
 
 ```typescript
 import {
@@ -177,9 +177,11 @@ onlyOfficeManagerFactory.destroy("editor-1");
 onlyOfficeManagerFactory.destroyAll();
 ```
 
-## 底层 API
+## 底层能力
 
-### `initializeOnlyOffice()`
+### 初始化资源
+
+调用 `initializeOnlyOffice()` 手动初始化 OnlyOffice 静态资源。
 
 ```typescript
 import { initializeOnlyOffice } from "@/components/onlyoffice-web-comp";
@@ -191,7 +193,9 @@ await initializeOnlyOffice();
 - `OnlyOfficeManager.create` / `EditorManager.create` 内部会自动调用
 - 仅在手动 `fromEditor` 绑定等高级场景需要显式调用
 
-### `createEditorView(options)`
+### 创建编辑器视图
+
+调用 `createEditorView(options)` 直接创建底层编辑器视图。
 
 ```typescript
 import { createEditorView } from "@/components/onlyoffice-web-comp";
@@ -220,7 +224,9 @@ await createEditorView({
 - Excel: `.xlsx`, `.xls`, `.ods`, `.csv`
 - PowerPoint: `.pptx`, `.ppt`, `.odp`
 
-### `editorManagerFactory` 和 `EditorManager`
+### 编辑器管理器
+
+`editorManagerFactory` 和 `EditorManager` 提供更底层的编辑器控制能力。
 
 #### 单实例
 
@@ -286,7 +292,9 @@ editorManagerFactory.destroyAll();
 
 多实例下 `export()` 通过 `instanceId` 过滤 `SAVE_DOCUMENT` 事件。只读模式下直接返回已缓存的 `binData`。
 
-### `convertBinToDocument()`
+### 文档格式转换
+
+调用 `convertBinToDocument()` 将 `Editor.bin` 转回目标 Office 文档格式。
 
 ```typescript
 import { convertBinToDocument, FILE_TYPE } from "@/components/onlyoffice-web-comp";

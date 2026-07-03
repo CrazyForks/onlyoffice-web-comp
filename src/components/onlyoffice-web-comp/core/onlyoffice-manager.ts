@@ -13,6 +13,7 @@ import {
   resetOnlyOfficeStaticResource,
   type FileType,
   type OfficeThemeId,
+  type OfficeXmlEventConfig,
   type OnlyOfficeStaticResourceOptions,
 } from "../const";
 import type { OfficeTheme } from "../internal/editor/types";
@@ -29,7 +30,11 @@ import { initializeOnlyOffice } from "../util/initialize";
 import { convertBinToDocument } from "../util/x2t";
 import type { User } from "../internal/editor/types";
 import { EditorManager, editorManagerFactory } from "./editor-manager";
-import { onlyofficeEventbus, type LoadingChangeData } from "./eventbus";
+import {
+  onlyofficeEventbus,
+  type LoadingChangeData,
+  type OfficeXmlSizeLimitExceededData,
+} from "./eventbus";
 
 export type OnlyOfficeManagerOptions = {
   /** DOM 容器 id，默认 ONLYOFFICE_ID */
@@ -43,6 +48,8 @@ export type OnlyOfficeManagerOptions = {
   lang?: OnlyOfficeLang;
   /** 编辑器界面主题，对应 customization.uiTheme */
   theme?: OfficeTheme;
+  /** Office XML 解压体积事件配置；默认关闭。 */
+  officeXmlEvent?: OfficeXmlEventConfig;
   /** 页面初始化会话，用于忽略路由切换后过期的 openDocument */
   loadSession?: number;
 };
@@ -53,6 +60,7 @@ export type OpenDocumentInput = {
   isNew?: boolean;
   readOnly?: boolean;
   loadSession?: number;
+  officeXmlEvent?: OfficeXmlEventConfig;
 };
 
 export class OnlyOfficeManager {
@@ -62,6 +70,9 @@ export class OnlyOfficeManager {
   private editor: EditorManager;
   private readOnly: boolean;
   private theme: OfficeTheme;
+  private officeXmlEvent?: OfficeXmlEventConfig;
+  private sourceFile: File | null = null;
+  private sourceFileName = "";
   private ready = false;
 
   private constructor(
@@ -73,6 +84,7 @@ export class OnlyOfficeManager {
     this.editor = editor;
     this.readOnly = options.readOnly ?? false;
     this.theme = options.theme ?? DEFAULT_OFFICE_THEME;
+    this.officeXmlEvent = options.officeXmlEvent;
     if (options.user) {
       editor.setUser(options.user);
     }
@@ -114,6 +126,7 @@ export class OnlyOfficeManager {
       isNew: true,
       readOnly: options.readOnly,
       loadSession: options.loadSession,
+      officeXmlEvent: options.officeXmlEvent,
     });
 
     return manager;
@@ -135,6 +148,7 @@ export class OnlyOfficeManager {
       file,
       readOnly: options.readOnly,
       loadSession: options.loadSession,
+      officeXmlEvent: options.officeXmlEvent,
     });
 
     return manager;
@@ -143,6 +157,8 @@ export class OnlyOfficeManager {
   /** 打开/切换文档（上传、新建、重开） */
   async openDocument(input: OpenDocumentInput) {
     const readOnly = input.readOnly ?? this.readOnly;
+    this.sourceFile = input.file ?? null;
+    this.sourceFileName = input.fileName;
 
     setDocmentObj({
       fileName: input.fileName,
@@ -163,6 +179,7 @@ export class OnlyOfficeManager {
       containerId: this.containerId,
       editorManager: this.editor,
       loadSession: input.loadSession,
+      officeXmlEvent: input.officeXmlEvent ?? this.officeXmlEvent,
     });
 
     this.readOnly = readOnly;
@@ -274,6 +291,16 @@ export class OnlyOfficeManager {
 
   /** 触发浏览器下载；内部先走 exportAsBlob 完整链路。 */
   async downloadExport() {
+    if (this.editor.isOfficeXmlSizeLimitExceeded()) {
+      if (this.sourceFile) {
+        downloadBlob(
+          this.sourceFile,
+          this.sourceFileName || this.sourceFile.name,
+        );
+        return;
+      }
+    }
+
     const { blob, fileName } = await this.exportAsBlob();
     downloadBlob(blob, fileName);
   }
@@ -282,6 +309,21 @@ export class OnlyOfficeManager {
     onlyofficeEventbus.on(ONLYOFFICE_EVENT_KEYS.LOADING_CHANGE, handler);
     return () => {
       onlyofficeEventbus.off(ONLYOFFICE_EVENT_KEYS.LOADING_CHANGE, handler);
+    };
+  }
+
+  onOfficeXmlSizeLimitExceeded(
+    handler: (data: OfficeXmlSizeLimitExceededData) => void,
+  ) {
+    onlyofficeEventbus.on(
+      ONLYOFFICE_EVENT_KEYS.OFFICE_XML_SIZE_LIMIT_EXCEEDED,
+      handler,
+    );
+    return () => {
+      onlyofficeEventbus.off(
+        ONLYOFFICE_EVENT_KEYS.OFFICE_XML_SIZE_LIMIT_EXCEEDED,
+        handler,
+      );
     };
   }
 

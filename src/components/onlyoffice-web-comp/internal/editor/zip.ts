@@ -215,6 +215,33 @@ export type ZipReplacement = {
   modDate?: number;
 };
 
+export type ZipXmlSizeStats = {
+  totalSize: number;
+  entryCount: number;
+};
+
+export function isOfficeXmlEntryName(name: string) {
+  return /\.(xml|rels)$/i.test(name);
+}
+
+export function getZipXmlUncompressedSize(
+  entries: readonly ZipEntry[],
+): ZipXmlSizeStats {
+  let totalSize = 0;
+  let entryCount = 0;
+
+  for (const entry of entries) {
+    if (entry.name.endsWith("/") || !isOfficeXmlEntryName(entry.name)) {
+      continue;
+    }
+
+    totalSize += entry.uncompressedSize;
+    entryCount += 1;
+  }
+
+  return { totalSize, entryCount };
+}
+
 export function writeZipEntries(
   entries: ZipEntry[],
   replacements: Map<string, ZipReplacement>,

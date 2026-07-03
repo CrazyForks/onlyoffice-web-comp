@@ -251,8 +251,42 @@ export type EditorDocumentSnapshot = {
   themes: Record<string, Uint8Array>;
 };
 
+export type OfficeXmlSizeLimitExceededPayload = {
+  fileName: string;
+  fileType: string;
+  errorDescription: string;
+  xmlBytes: number;
+  limitBytes: number;
+  entryCount: number;
+};
+
+export const OFFICE_XML_SIZE_LIMIT_ERROR_MESSAGE = "文件过大，不支持解析";
+
+export class OfficeXmlSizeLimitExceededError extends Error {
+  readonly payload: OfficeXmlSizeLimitExceededPayload;
+
+  constructor(payload: OfficeXmlSizeLimitExceededPayload) {
+    super(OFFICE_XML_SIZE_LIMIT_ERROR_MESSAGE);
+    this.name = "OfficeXmlSizeLimitExceededError";
+    this.payload = payload;
+  }
+}
+
+export function isOfficeXmlSizeLimitExceededError(
+  error: unknown,
+): error is OfficeXmlSizeLimitExceededError {
+  return (
+    error instanceof OfficeXmlSizeLimitExceededError ||
+    (error instanceof Error &&
+      error.name === "OfficeXmlSizeLimitExceededError" &&
+      "payload" in error)
+  );
+}
+
 export interface ServerOptions {
   getState?: () => { plugins: PluginMode; readOnly?: boolean };
   /** 用户触发保存（非 export/downloadAs 导出）时回调，携带最新文档快照。 */
   onUserSave?: (snapshot: EditorDocumentSnapshot) => void;
+  /** 文档异步加载失败时回调；open() 返回后 x2t 转换仍可能在 loadPromise 中失败。 */
+  onLoadError?: (error: Error) => void;
 }

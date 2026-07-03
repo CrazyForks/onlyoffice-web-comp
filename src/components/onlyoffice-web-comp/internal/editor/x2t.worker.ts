@@ -869,20 +869,9 @@ async function convert({
     console.error("ccall", e);
   }
 
-  const PDF_MAX_OUTPUT_BYTES = 50 * 1024 * 1024;
-
   // Read output file
   let output: Uint8Array | null = null;
   try {
-    const outputSize = x2t.FS.stat(toPath).size;
-    if (outputSize > PDF_MAX_OUTPUT_BYTES) {
-      try {
-        x2t.FS.unlink(toPath);
-      } catch {}
-      throw new Error(
-        `x2t output too large (${outputSize} bytes); conversion likely corrupt`,
-      );
-    }
     output = x2t.FS.readFile(toPath);
     if (output && fileTo === "Editor.bin" && fontAliases) {
       output = restoreEditorBinFontNames(output, fontAliases);
