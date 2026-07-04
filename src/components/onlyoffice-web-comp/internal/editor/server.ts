@@ -10,6 +10,7 @@ import {
 } from "./types";
 import { emptyDocx, emptyPdf, emptyPptx, emptyXlsx } from "./empty";
 import { convertCsvBufferToXlsxBuffer } from "./csv-to-xlsx";
+import { createDocxFromText, createXlsxFromText } from "./plain-text-office";
 import {
   getDocumentType,
   getFileExt,
@@ -89,6 +90,31 @@ function isOfficeZipFileType(fileType: string) {
   return /^(docx|docm|dotx|dotm|xlsx|xlsm|xltx|xltm|pptx|pptm|potx|potm|ppsx|ppsm)$/i.test(
     getFileExt(fileType),
   );
+}
+
+function isZipBytes(data: Uint8Array) {
+  return (
+    data.length >= 4 &&
+    data[0] === 0x50 &&
+    data[1] === 0x4b &&
+    ((data[2] === 0x03 && data[3] === 0x04) ||
+      (data[2] === 0x05 && data[3] === 0x06) ||
+      (data[2] === 0x07 && data[3] === 0x08))
+  );
+}
+
+function createPlainTextOfficeFallback(
+  buffer: ArrayBuffer,
+  fileType: string,
+) {
+  switch (getDocumentType(fileType)) {
+    case "word":
+      return { buffer: createDocxFromText(buffer), fileType: "docx" };
+    case "cell":
+      return { buffer: createXlsxFromText(buffer), fileType: "xlsx" };
+    default:
+      return null;
+  }
 }
 
 const PDF_MAX_OUTPUT_BYTES = 50 * 1024 * 1024;
@@ -914,23 +940,33 @@ export class EditorServer {
       buffer = await buffer();
     }
 
+    const bytes = new Uint8Array(buffer);
+    const fallback =
+      isOfficeZipFileType(fileType) && !isZipBytes(bytes)
+        ? createPlainTextOfficeFallback(buffer, fileType)
+        : null;
+    if (fallback) {
+      buffer = fallback.buffer;
+    }
+    const sourceFileType = fallback?.fileType ?? fileType;
+
     let output: Uint8Array | null = null;
     let media: { [key: string]: Uint8Array } = {};
     let themes: { [key: string]: Uint8Array } = {};
 
-    if (fileType == "pdf") {
+    if (sourceFileType == "pdf") {
       output = new Uint8Array(buffer);
-    } else if (fileType === "csv") {
+    } else if (sourceFileType === "csv") {
       ({ output, media } = await this.loadCsvDocument(buffer));
     } else {
       ({ output, media, themes } = await this.convertBufferToEditorBin(
         buffer,
-        fileType,
+        sourceFileType,
       ));
     }
 
     if (!output) {
-      throw new Error(`Failed to convert ${fileType} file`);
+      throw new Error(`Failed to convert ${sourceFileType} file`);
     }
 
     if (this.urlsMap.size > 0) {

@@ -4,10 +4,7 @@ const appPort = Number(process.env.PLAYWRIGHT_APP_PORT ?? 3001);
 const cdnPort = Number(process.env.PLAYWRIGHT_CDN_PORT ?? 3010);
 const host = process.env.PLAYWRIGHT_HOST ?? "127.0.0.1";
 const isCI = !!process.env.CI;
-const headless =
-  process.env.PLAYWRIGHT_HEADLESS !== undefined
-    ? process.env.PLAYWRIGHT_HEADLESS !== "false"
-    : isCI;
+const headless = true;
 const appCommand = isCI
   ? `pnpm exec next start --port ${appPort} --hostname ${host}`
   : `pnpm exec next dev --turbopack --port ${appPort} --hostname ${host}`;

@@ -19,5 +19,19 @@
     "fileType": "DOCX",
     "source": "extension/content mismatch rejection",
     "size": 6524
+  },
+  {
+    "name": "plain-text-as-docx.docx",
+    "kind": "positive",
+    "fileType": "DOCX",
+    "source": "plain text content with DOCX extension fallback",
+    "size": 14
+  },
+  {
+    "name": "plain-text-as-xlsx.xlsx",
+    "kind": "positive",
+    "fileType": "XLSX",
+    "source": "plain text content with XLSX extension fallback",
+    "size": 15
   }
 ]
