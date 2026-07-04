@@ -154,16 +154,30 @@ export function resetAll() {
   converter.terminate();
 }
 
-export async function runScenario(mode: ResourceMode, cdnOrigin: string) {
+export async function runScenario(
+  mode: ResourceMode,
+  cdnOrigin: string,
+  onStepsChange?: (steps: StepResult[]) => void,
+) {
   const steps: StepResult[] = [];
 
   const runStep = async (name: string, action: () => Promise<string | void>) => {
+    const stepIndex =
+      steps.push({ name, status: "running", detail: "running" }) - 1;
+    onStepsChange?.([...steps]);
+
     try {
       const detail = await action();
-      steps.push({ name, status: "passed", detail: detail || undefined });
+      steps[stepIndex] = {
+        name,
+        status: "passed",
+        detail: detail || undefined,
+      };
+      onStepsChange?.([...steps]);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      steps.push({ name, status: "failed", detail });
+      steps[stepIndex] = { name, status: "failed", detail };
+      onStepsChange?.([...steps]);
       throw new Error(`${name}: ${detail}`);
     }
   };
@@ -474,7 +488,15 @@ export function OnlyOfficeFactoryE2EPage() {
       setResult({ mode: params.mode, status: "running", steps: [] });
 
       // 用例入口
-      runScenario(params.mode, params.cdnOrigin)
+      let latestSteps: StepResult[] = [];
+      const updateSteps = (steps: StepResult[]) => {
+        latestSteps = steps;
+        if (!disposed) {
+          setResult((current) => ({ ...current, steps }));
+        }
+      };
+
+      runScenario(params.mode, params.cdnOrigin, updateSteps)
         .then((steps) => {
           if (!disposed) {
             setResult({ mode: params.mode, status: "passed", steps });
@@ -485,6 +507,7 @@ export function OnlyOfficeFactoryE2EPage() {
             setResult((current) => ({
               ...current,
               status: "failed",
+              steps: latestSteps,
               error: error instanceof Error ? error.message : String(error),
             }));
           }

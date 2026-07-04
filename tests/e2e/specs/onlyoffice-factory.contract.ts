@@ -2,7 +2,7 @@ export type ResourceMode = "local" | "cdn";
 
 export type StepResult = {
   name: string;
-  status: "passed" | "failed";
+  status: "running" | "passed" | "failed";
   detail?: string;
 };
 
