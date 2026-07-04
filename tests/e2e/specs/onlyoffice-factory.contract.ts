@@ -2,7 +2,7 @@ export type ResourceMode = "local" | "cdn";
 
 export type StepResult = {
   name: string;
-  status: "passed" | "failed";
+  status: "running" | "passed" | "failed";
   detail?: string;
 };
 
@@ -23,6 +23,7 @@ export const ONLYOFFICE_FACTORY_EXPECTED_STEPS = [
   "generated negative fixtures",
   "manager create",
   "manager createWithFile",
+  "text fallback files",
   "manager fromEditor",
   "manager factory destroyAll",
 ] as const;

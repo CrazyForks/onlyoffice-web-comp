@@ -1,7 +1,15 @@
-import { expect, test } from "playwright/test";
+import {
+  expect,
+  test,
+  type Browser,
+  type Page,
+  type TestInfo,
+} from "playwright/test";
 import {
   ONLYOFFICE_FACTORY_EXPECTED_STEPS,
+  type ResourceMode,
   type ScenarioResult,
+  type StepResult,
 } from "./onlyoffice-factory.contract";
 
 const cdnOrigin =
@@ -10,30 +18,85 @@ const cdnOrigin =
     process.env.PLAYWRIGHT_CDN_PORT ?? 3010
   }`;
 
-// factory API 在本地资源和独立 CDN 资源下都必须表现一致。
-for (const mode of ["local", "cdn"] as const) {
-  test(`OnlyOffice factory APIs work with ${mode} resources`, async ({
-    page,
-  }, testInfo) => {
-    const consoleLines: string[] = [];
+const scenarioTimeoutMs = 110_000;
+const testTimeoutMs = scenarioTimeoutMs + 30_000;
 
-    // 按行附加浏览器日志，方便 CI 中定位 x2t/iframe 错误；
-    // 用例通过时又不会把 reporter 输出刷得太吵。
-    page.on("console", (message) => {
-      const text = `[${message.type()}] ${message.text()}`;
-      consoleLines.push(text);
-      testInfo.attach(`console-${consoleLines.length}`, {
-        body: text,
-        contentType: "text/plain",
-      });
+type ScenarioRun = {
+  result: ScenarioResult;
+  consoleLines: string[];
+  waitError?: string;
+};
+
+function stepFailureMessage(mode: ResourceMode, name: string, step?: StepResult) {
+  if (!step) {
+    return `[${mode}] missing scenario step: ${name}`;
+  }
+
+  return `[${mode}] ${name} ${step.status}${
+    step.detail ? `\n${step.detail}` : ""
+  }`;
+}
+
+function assertStepPassed(
+  mode: ResourceMode,
+  name: string,
+  step?: StepResult,
+): asserts step is StepResult {
+  if (!step || step.status !== "passed") {
+    throw new Error(stepFailureMessage(mode, name, step));
+  }
+}
+
+function firstBlockingStep(result: ScenarioResult) {
+  return result.steps.find((step) => step.status !== "passed");
+}
+
+async function readScenarioResult(page: Page) {
+  const text = await page
+    .getByTestId("scenario-result")
+    .innerText({ timeout: 5_000 })
+    .catch(() => null);
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text) as ScenarioResult;
+  } catch {
+    return null;
+  }
+}
+
+async function attachScenarioRun(testInfo: TestInfo, run: ScenarioRun) {
+  await testInfo.attach("scenario-result", {
+    body: JSON.stringify(run.result, null, 2),
+    contentType: "application/json",
+  });
+
+  if (run.consoleLines.length > 0) {
+    await testInfo.attach("browser-console", {
+      body: run.consoleLines.join("\n"),
+      contentType: "text/plain",
     });
+  }
+}
 
-    page.on("pageerror", (error) => {
-      consoleLines.push(`[pageerror] ${error.message}`);
-    });
+async function runScenarioPage(
+  browser: Browser,
+  mode: ResourceMode,
+): Promise<ScenarioRun> {
+  const page = await browser.newPage();
+  const consoleLines: string[] = [];
+  let waitError: string | undefined;
 
-    // Next 路由只保留薄 wrapper；OnlyOffice SDK、worker、iframe 都必须在真实
-    // 浏览器上下文中运行，所以生命周期和 API 断言放在页面侧 scenario 中。
+  page.on("console", (message) => {
+    consoleLines.push(`[${message.type()}] ${message.text()}`);
+  });
+  page.on("pageerror", (error) => {
+    consoleLines.push(`[pageerror] ${error.message}`);
+  });
+
+  try {
     const url = new URL("/e2e/onlyoffice-factory", "http://e2e.local");
     url.searchParams.set("mode", mode);
     if (mode === "cdn") {
@@ -43,33 +106,96 @@ for (const mode of ["local", "cdn"] as const) {
     await page.goto(`${url.pathname}${url.search}`, {
       waitUntil: "domcontentloaded",
     });
-
     await expect(page.getByTestId("scenario-status")).toBeVisible();
 
-    // 等页面内 scenario 结束，而不是在 Playwright 里重复编排每个异步步骤；
-    // 下方 JSON 结果是 browser scenario 和 spec 之间的稳定契约。
-    await page.waitForFunction(
-      () => {
-        const status = document.querySelector(
-          '[data-testid="scenario-status"]',
-        )?.textContent;
-        return status === "passed" || status === "failed";
+    await page
+      .waitForFunction(
+        () => {
+          const status = document.querySelector(
+            '[data-testid="scenario-status"]',
+          )?.textContent;
+          return status === "passed" || status === "failed";
+        },
+        undefined,
+        { timeout: scenarioTimeoutMs },
+      )
+      .catch((error) => {
+        waitError = error instanceof Error ? error.message : String(error);
+      });
+
+    const result = await readScenarioResult(page);
+    return {
+      result: result ?? {
+        mode,
+        status: "failed",
+        steps: [],
+        error: waitError ?? "Scenario result was not rendered",
       },
-      undefined,
-      { timeout: 60_000 },
-    );
+      consoleLines,
+      waitError,
+    };
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
 
-    const result = JSON.parse(
-      await page.getByTestId("scenario-result").innerText(),
-    ) as ScenarioResult;
+for (const mode of ["local", "cdn"] as const) {
+  test.describe(`OnlyOffice factory APIs / ${mode}`, () => {
+    test.describe.configure({ mode: "serial" });
 
-    expect(result.mode).toBe(mode);
-    expect(result.status, JSON.stringify(result, null, 2)).toBe("passed");
-    // 显式校验步骤列表，避免已知边界场景被静默跳过；
-    // 例如钉钉非法 bookmark 的 x2t 导入回归。
-    expect(result.steps.map((step) => step.name)).toEqual(
-      ONLYOFFICE_FACTORY_EXPECTED_STEPS,
-    );
-    expect(result.steps.every((step) => step.status === "passed")).toBe(true);
+    let run: ScenarioRun;
+
+    test.beforeAll(async ({ browser }, testInfo) => {
+      testInfo.setTimeout(testTimeoutMs);
+      run = await runScenarioPage(browser, mode);
+    });
+
+    test(`${mode} / scenario boot`, async ({}, testInfo) => {
+      await attachScenarioRun(testInfo, run);
+      expect(run.result.mode).toBe(mode);
+      expect(run.result.status).not.toBe("idle");
+      expect(run.waitError, run.waitError).toBeUndefined();
+    });
+
+    for (const name of ONLYOFFICE_FACTORY_EXPECTED_STEPS) {
+      test(`${mode} / ${name}`, async ({}, testInfo) => {
+        const step = run.result.steps.find((item) => item.name === name);
+        const blockingStep = firstBlockingStep(run.result);
+        if (!step && blockingStep) {
+          test.skip(
+            true,
+            `[${mode}] blocked after ${blockingStep.name}: ${
+              blockingStep.detail ?? blockingStep.status
+            }`,
+          );
+        }
+
+        if (!step || step.status !== "passed") {
+          await attachScenarioRun(testInfo, run);
+        }
+
+        assertStepPassed(mode, name, step);
+      });
+    }
+
+    test(`${mode} / scenario contract`, async ({}, testInfo) => {
+      const blockingStep = firstBlockingStep(run.result);
+      if (blockingStep) {
+        test.skip(
+          true,
+          `[${mode}] blocked after ${blockingStep.name}: ${
+            blockingStep.detail ?? blockingStep.status
+          }`,
+        );
+      }
+
+      await attachScenarioRun(testInfo, run);
+      expect(run.result.steps.map((step) => step.name)).toEqual(
+        ONLYOFFICE_FACTORY_EXPECTED_STEPS,
+      );
+      expect(run.result.status, JSON.stringify(run.result, null, 2)).toBe(
+        "passed",
+      );
+    });
   });
 }

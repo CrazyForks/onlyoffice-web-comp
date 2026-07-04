@@ -1,74 +1,38 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { concatBytes, crc32, writeU16, writeU32 } from "./zip";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const outputDir = path.join(__dirname, "..", "files");
 const encoder = new TextEncoder();
 
-const crcTable = (() => {
-  const table = new Uint32Array(256);
-  for (let i = 0; i < 256; i += 1) {
-    let c = i;
-    for (let k = 0; k < 8; k += 1) {
-      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    }
-    table[i] = c >>> 0;
-  }
-  return table;
-})();
-
-function crc32(data) {
-  let crc = 0xffffffff;
-  for (const byte of data) {
-    crc = crcTable[(crc ^ byte) & 0xff] ^ (crc >>> 8);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-function writeU16(data, offset, value) {
-  data[offset] = value & 0xff;
-  data[offset + 1] = (value >>> 8) & 0xff;
-}
-
-function writeU32(data, offset, value) {
-  data[offset] = value & 0xff;
-  data[offset + 1] = (value >>> 8) & 0xff;
-  data[offset + 2] = (value >>> 16) & 0xff;
-  data[offset + 3] = (value >>> 24) & 0xff;
-}
-
-function concatBytes(parts) {
-  const output = new Uint8Array(
-    parts.reduce((total, part) => total + part.length, 0),
-  );
-  let offset = 0;
-  for (const part of parts) {
-    output.set(part, offset);
-    offset += part.length;
-  }
-  return output;
-}
-
-function xml(strings, ...values) {
-  return strings.reduce((result, value, index) => {
-    return `${result}${value}${values[index] ?? ""}`;
-  }, "").trim();
-}
-
-function utf8(value) {
+function utf8(value: string) {
   return encoder.encode(value);
 }
 
-function zip(entries) {
-  const localParts = [];
-  const centralParts = [];
+function xml(strings: TemplateStringsArray, ...values: unknown[]) {
+  return strings
+    .reduce((result, value, index) => `${result}${value}${values[index] ?? ""}`, "")
+    .trim();
+}
+
+function escapeXml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function decodeText(buffer: ArrayBuffer) {
+  return new TextDecoder("utf-8").decode(buffer);
+}
+
+function zip(entries: Array<[string, string | Uint8Array]>) {
+  const localParts: Uint8Array[] = [];
+  const centralParts: Uint8Array[] = [];
   let localOffset = 0;
 
   for (const [name, content] of entries) {
     const nameBytes = utf8(name);
-    const data =
-      typeof content === "string" ? utf8(content) : new Uint8Array(content);
+    const data = typeof content === "string" ? utf8(content) : content;
     const crc = crc32(data);
 
     const localHeader = new Uint8Array(30 + nameBytes.length);
@@ -118,48 +82,29 @@ function zip(entries) {
   writeU32(end, 12, centralDirectory.length);
   writeU32(end, 16, localOffset);
 
-  return concatBytes([...localParts, centralDirectory, end]);
+  return concatBytes([...localParts, centralDirectory, end]).buffer;
 }
 
 const coreProps = xml`
   <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-  <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-    <dc:title>OnlyOffice E2E Fixture</dc:title>
-    <dc:creator>Playwright</dc:creator>
-    <cp:lastModifiedBy>Playwright</cp:lastModifiedBy>
+  <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Plain text fallback</dc:title>
   </cp:coreProperties>
 `;
 
 const appProps = xml`
   <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-  <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
-    <Application>OnlyOffice Web Comp E2E</Application>
+  <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">
+    <Application>OnlyOffice Web Comp</Application>
   </Properties>
 `;
 
-function docxDocumentXml({ invalidBookmark = false, largeText = "" } = {}) {
-  const bookmark = invalidBookmark
-    ? '<w:bookmarkStart w:id="DingTalkBookmark" w:name="_GoBack"/><w:bookmarkEnd w:id="DingTalkBookmark"/>'
-    : "";
-  return xml`
-    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-      <w:body>
-        <w:p>
-          ${bookmark}
-          <w:r><w:t>OnlyOffice generated DOCX fixture</w:t></w:r>
-        </w:p>
-        <w:p><w:r><w:t>${largeText}</w:t></w:r></w:p>
-        <w:sectPr>
-          <w:pgSz w:w="11906" w:h="16838"/>
-          <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>
-        </w:sectPr>
-      </w:body>
-    </w:document>
-  `;
-}
+export function createDocxFromText(buffer: ArrayBuffer) {
+  const paragraphs = decodeText(buffer)
+    .split(/\r\n|\r|\n/)
+    .map((line) => `<w:p><w:r><w:t xml:space="preserve">${escapeXml(line)}</w:t></w:r></w:p>`)
+    .join("");
 
-function docx({ invalidBookmark = false, largeText = "" } = {}) {
   return zip([
     [
       "[Content_Types].xml",
@@ -187,7 +132,21 @@ function docx({ invalidBookmark = false, largeText = "" } = {}) {
     ],
     ["docProps/core.xml", coreProps],
     ["docProps/app.xml", appProps],
-    ["word/document.xml", docxDocumentXml({ invalidBookmark, largeText })],
+    [
+      "word/document.xml",
+      xml`
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body>
+            ${paragraphs || '<w:p><w:r><w:t></w:t></w:r></w:p>'}
+            <w:sectPr>
+              <w:pgSz w:w="11906" w:h="16838"/>
+              <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>
+            </w:sectPr>
+          </w:body>
+        </w:document>
+      `,
+    ],
     [
       "word/_rels/document.xml.rels",
       xml`
@@ -198,9 +157,9 @@ function docx({ invalidBookmark = false, largeText = "" } = {}) {
   ]);
 }
 
-function xlsx() {
-  const longText =
-    "OnlyOffice generated XLSX fixture with long text. ".repeat(20).trim();
+export function createXlsxFromText(buffer: ArrayBuffer) {
+  const text = escapeXml(decodeText(buffer));
+
   return zip([
     [
       "[Content_Types].xml",
@@ -267,84 +226,11 @@ function xlsx() {
       xml`
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-          <dimension ref="A1:C3"/>
           <sheetData>
-            <row r="1">
-              <c r="A1" t="inlineStr"><is><t>Label</t></is></c>
-              <c r="B1" t="inlineStr"><is><t>Value</t></is></c>
-              <c r="C1" t="inlineStr"><is><t>Notes</t></is></c>
-            </row>
-            <row r="2">
-              <c r="A2" t="inlineStr"><is><t>Total</t></is></c>
-              <c r="B2"><v>42</v></c>
-              <c r="C2" t="inlineStr"><is><t>${longText}</t></is></c>
-            </row>
-            <row r="3">
-              <c r="A3" t="inlineStr"><is><t>Formula</t></is></c>
-              <c r="B3"><f>B2*2</f><v>84</v></c>
-            </row>
+            <row r="1"><c r="A1" t="inlineStr"><is><t xml:space="preserve">${text}</t></is></c></row>
           </sheetData>
         </worksheet>
       `,
     ],
   ]);
 }
-
-const fixtures = [
-  {
-    name: "edge-invalid-bookmark.docx",
-    data: docx({ invalidBookmark: true }),
-    kind: "positive",
-    fileType: "DOCX",
-    source: "#29 / PR #30 invalid DingTalk DOCX bookmark",
-  },
-  {
-    name: "xml-limit.docx",
-    data: docx({ largeText: "XML_LIMIT ".repeat(4096) }),
-    kind: "negative",
-    fileType: "DOCX",
-    source: "#34 configurable Office XML size guard",
-  },
-  {
-    name: "mismatch-xlsx-as-docx.docx",
-    data: xlsx(),
-    kind: "negative",
-    fileType: "DOCX",
-    source: "extension/content mismatch rejection",
-  },
-  {
-    name: "plain-text-as-docx.docx",
-    data: utf8("dsadads\ndasdas"),
-    kind: "positive",
-    fileType: "DOCX",
-    source: "plain text content with DOCX extension fallback",
-  },
-  {
-    name: "plain-text-as-xlsx.xlsx",
-    data: utf8("dsadads.dasdas\n"),
-    kind: "positive",
-    fileType: "XLSX",
-    source: "plain text content with XLSX extension fallback",
-  },
-];
-
-fs.rmSync(outputDir, { recursive: true, force: true });
-fs.mkdirSync(outputDir, { recursive: true });
-
-for (const fixture of fixtures) {
-  fs.writeFileSync(path.join(outputDir, fixture.name), fixture.data);
-}
-
-fs.writeFileSync(
-  path.join(outputDir, "manifest.json"),
-  JSON.stringify(
-    fixtures.map(({ data, ...fixture }) => ({
-      ...fixture,
-      size: data.length,
-    })),
-    null,
-    2,
-  ),
-);
-
-console.log(`Generated ${fixtures.length} Office fixtures in ${outputDir}`);
