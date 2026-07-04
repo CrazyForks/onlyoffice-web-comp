@@ -6,7 +6,11 @@
     "dev": "next dev --turbopack --port 3001",
     "dev:cdn": "node scripts/static-server.mjs public/packages --port 3010",
     "build": "next build --turbopack",
-    "start": "next dev --turbopack"
+    "start": "next dev --turbopack",
+    "test:e2e:files": "node tests/e2e/scripts/generate-office-files.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:install": "playwright install chromium"
   },
   "dependencies": {
     "ahooks": "^3.9.5",
@@ -27,6 +31,7 @@
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "playwright": "^1.61.1",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
