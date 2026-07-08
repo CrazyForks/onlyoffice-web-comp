@@ -17,47 +17,84 @@ export type SetOnlyOfficeDocumentStateInput = Omit<
   fileName: string;
 };
 
-let documentState: OnlyOfficeDocumentState = {
-  isNew: true,
-  fileName: "New Document.docx",
-  fileType: "docx",
-};
+const DEFAULT_DOCUMENT_SCOPE = "__default__";
 
-export function setDocmentObj(state: SetOnlyOfficeDocumentStateInput) {
-  documentState = {
-    ...state,
-    isNew: state.isNew ?? !state.file,
-    fileType: state.fileType || getFileExt(state.fileName) || "docx",
-  };
-}
-
-export function getDocmentObj() {
-  return documentState;
-}
-
-export function clearDocmentObj() {
-  documentState = {
+function createDefaultDocumentState(): OnlyOfficeDocumentState {
+  return {
     isNew: true,
     fileName: "New Document.docx",
     fileType: "docx",
   };
 }
 
-export function setNewDocument(fileType = "docx") {
-  setDocmentObj({
-    isNew: true,
-    fileName: `New Document.${fileType}`,
-    fileType,
-  });
+function normalizeDocumentState(
+  state: SetOnlyOfficeDocumentStateInput,
+): OnlyOfficeDocumentState {
+  return {
+    ...state,
+    isNew: state.isNew ?? !state.file,
+    fileType: state.fileType || getFileExt(state.fileName) || "docx",
+  };
 }
 
-export function setDocumentFile(file: File, fileName = file.name) {
-  setDocmentObj({
-    isNew: false,
-    file,
-    fileName,
-    fileType: getFileExt(fileName) || getFileExt(file.name) || "docx",
-  });
+const documentStates = new Map<string, OnlyOfficeDocumentState>();
+
+documentStates.set(DEFAULT_DOCUMENT_SCOPE, createDefaultDocumentState());
+
+function getScopeId(scopeId?: string) {
+  return scopeId || DEFAULT_DOCUMENT_SCOPE;
+}
+
+export function setDocmentObj(
+  state: SetOnlyOfficeDocumentStateInput,
+  scopeId?: string,
+) {
+  documentStates.set(getScopeId(scopeId), normalizeDocumentState(state));
+}
+
+export function getDocmentObj(scopeId?: string) {
+  const key = getScopeId(scopeId);
+  let state = documentStates.get(key);
+  if (!state) {
+    state = createDefaultDocumentState();
+    documentStates.set(key, state);
+  }
+  return state;
+}
+export function clearDocmentObj(scopeId?: string) {
+  if (scopeId) {
+    documentStates.delete(scopeId);
+    return;
+  }
+
+  documentStates.set(DEFAULT_DOCUMENT_SCOPE, createDefaultDocumentState());
+}
+
+export function setNewDocument(fileType = "docx", scopeId?: string) {
+  setDocmentObj(
+    {
+      isNew: true,
+      fileName: `New Document.${fileType}`,
+      fileType,
+    },
+    scopeId,
+  );
+}
+
+export function setDocumentFile(
+  file: File,
+  fileName = file.name,
+  scopeId?: string,
+) {
+  setDocmentObj(
+    {
+      isNew: false,
+      file,
+      fileName,
+      fileType: getFileExt(fileName) || getFileExt(file.name) || "docx",
+    },
+    scopeId,
+  );
 }
 
 export function setDocumentUrl(
@@ -71,14 +108,27 @@ export function setDocumentUrl(
     fileName?: string;
     loader?: (url: string) => Promise<ArrayBuffer>;
   } = {},
+  scopeId?: string,
 ) {
   const name = fileName || decodeURIComponent(url.split("/").pop() || "Document");
 
-  setDocmentObj({
-    isNew: false,
-    url,
-    loader,
-    fileName: name,
-    fileType: fileType || getFileExt(name) || "docx",
-  });
+  setDocmentObj(
+    {
+      isNew: false,
+      url,
+      loader,
+      fileName: name,
+      fileType: fileType || getFileExt(name) || "docx",
+    },
+    scopeId,
+  );
+}
+
+export function clearAllDocmentObjs() {
+  documentStates.clear();
+  documentStates.set(DEFAULT_DOCUMENT_SCOPE, createDefaultDocumentState());
+}
+
+export function getAllDocmentObjs() {
+  return new Map(documentStates);
 }
