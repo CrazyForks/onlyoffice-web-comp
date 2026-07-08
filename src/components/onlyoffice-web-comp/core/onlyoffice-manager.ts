@@ -17,7 +17,11 @@ import {
   type OnlyOfficeStaticResourceOptions,
 } from "../const";
 import type { OfficeTheme } from "../internal/editor/types";
-import { getDocmentObj, setDocmentObj } from "../store/document";
+import {
+  clearDocmentObj,
+  getDocmentObj,
+  setDocmentObj,
+} from "../store/document";
 import {
   getCurrentLang,
   getOnlyOfficeLang,
@@ -63,6 +67,14 @@ export type OpenDocumentInput = {
   officeXmlEvent?: OfficeXmlEventConfig;
 };
 
+export type OnlyOfficeExportBlobResult = {
+  blob: Blob;
+  fileName: string;
+  /** true 表示未经过编辑器导出转换，而是返回当前打开的原始文件。 */
+  isOriginalFileFallback?: boolean;
+  fallbackReason?: "officeXmlSizeLimitExceeded";
+};
+
 export class OnlyOfficeManager {
   readonly containerId: string;
   readonly fileType: FileType;
@@ -71,8 +83,6 @@ export class OnlyOfficeManager {
   private readOnly: boolean;
   private theme: OfficeTheme;
   private officeXmlEvent?: OfficeXmlEventConfig;
-  private sourceFile: File | null = null;
-  private sourceFileName = "";
   private ready = false;
 
   private constructor(
@@ -157,16 +167,17 @@ export class OnlyOfficeManager {
   /** 打开/切换文档（上传、新建、重开） */
   async openDocument(input: OpenDocumentInput) {
     const readOnly = input.readOnly ?? this.readOnly;
-    this.sourceFile = input.file ?? null;
-    this.sourceFileName = input.fileName;
 
-    setDocmentObj({
-      fileName: input.fileName,
-      file: input.file,
-      isNew: input.isNew ?? !input.file,
-    });
+    setDocmentObj(
+      {
+        fileName: input.fileName,
+        file: input.file,
+        isNew: input.isNew ?? !input.file,
+      },
+      this.containerId,
+    );
 
-    const { fileName, file } = getDocmentObj();
+    const { fileName, file } = getDocmentObj(this.containerId);
 
     await this.editor.create({
       file,
@@ -270,7 +281,19 @@ export class OnlyOfficeManager {
   }
 
   /** 导出为 Office 文件 Blob：Editor.bin → x2t → doc.{fileType}。 */
-  async exportAsBlob() {
+  async exportAsBlob(): Promise<OnlyOfficeExportBlobResult> {
+    if (this.editor.isOfficeXmlSizeLimitExceeded()) {
+      const { file, fileName } = getDocmentObj(this.containerId);
+      if (file) {
+        return {
+          blob: file,
+          fileName: fileName || file.name,
+          isOriginalFileFallback: true,
+          fallbackReason: "officeXmlSizeLimitExceeded",
+        };
+      }
+    }
+
     const binData = await this.editor.export();
     const exportFileType = binData.fileType || this.fileType.toLowerCase();
     const result = await convertBinToDocument(
@@ -291,16 +314,6 @@ export class OnlyOfficeManager {
 
   /** 触发浏览器下载；内部先走 exportAsBlob 完整链路。 */
   async downloadExport() {
-    if (this.editor.isOfficeXmlSizeLimitExceeded()) {
-      if (this.sourceFile) {
-        downloadBlob(
-          this.sourceFile,
-          this.sourceFileName || this.sourceFile.name,
-        );
-        return;
-      }
-    }
-
     const { blob, fileName } = await this.exportAsBlob();
     downloadBlob(blob, fileName);
   }
@@ -329,6 +342,7 @@ export class OnlyOfficeManager {
 
   destroy() {
     this.editor.destroy();
+    clearDocmentObj(this.containerId);
     this.ready = false;
   }
 }
