@@ -1403,7 +1403,7 @@ export class EditorServer {
     }
 
     const { totalSize, entryCount } = getZipXmlUncompressedSize(entries);
-    this.logRaw("log", "operation", "office xml total size", [
+    this.logRaw("error", "operation", "office xml total size", [
       "onlyoffice-totalSize:",
       `${(totalSize / 1024 / 1024).toFixed(2)} MB`,
     ]);
