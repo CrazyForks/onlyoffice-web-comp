@@ -16,6 +16,7 @@ interface WorkerResponse {
   type: string;
   payload?: any;
   error?: string;
+  errorDetails?: unknown;
 }
 
 export class X2tConverter {
@@ -99,7 +100,7 @@ export class X2tConverter {
    * @description 处理 worker 返回的响应消息。
    */
   private handleWorkerMessage = (event: MessageEvent<WorkerResponse>) => {
-    const { id, type, payload, error } = event.data;
+    const { id, type, payload, error, errorDetails } = event.data;
 
     if (type === "ready") {
       this.logRaw("log", "worker ready", ["[X2tConverter] Worker ready"]);
@@ -112,7 +113,17 @@ export class X2tConverter {
     this.pendingMessages.delete(id);
 
     if (type === "error") {
-      pending.reject(new Error(error || "Unknown worker error"));
+      const errorMessage = error || "Unknown worker error";
+      const details =
+        errorDetails && typeof errorDetails === "object"
+          ? { message: errorMessage, ...errorDetails }
+          : { message: errorMessage };
+      if (this.logger) {
+        this.logger.error("worker", "worker request failed", details);
+      } else {
+        console.error("[X2tConverter] Worker request failed:", details);
+      }
+      pending.reject(new Error(errorMessage));
     } else {
       pending.resolve(payload);
     }

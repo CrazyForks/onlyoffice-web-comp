@@ -521,6 +521,96 @@ function cleanupFiles(files: string[]): void {
   cleanThemes();
 }
 
+type SerializedWorkerError = {
+  name: string;
+  message?: string;
+  errno?: unknown;
+  code?: unknown;
+  path?: unknown;
+  text: string;
+};
+
+type X2tWorkerErrorDetails = {
+  stage: string;
+  fileFrom?: string;
+  fileTo?: string;
+  readOutputError?: SerializedWorkerError;
+};
+
+class X2tWorkerError extends Error {
+  constructor(
+    message: string,
+    public readonly details: X2tWorkerErrorDetails,
+  ) {
+    super(message);
+    this.name = "X2tWorkerError";
+  }
+}
+
+function formatSerializedWorkerError(error: Omit<SerializedWorkerError, "text">) {
+  const message = error.message ? `: ${error.message}` : "";
+  const details = [
+    ["errno", error.errno],
+    ["code", error.code],
+    ["path", error.path],
+  ]
+    .filter(([, value]) => value != null)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(", ");
+  return details
+    ? `${error.name}${message} (${details})`
+    : `${error.name}${message}`;
+}
+
+function serializeWorkerError(error: unknown): SerializedWorkerError {
+  if (error instanceof Error) {
+    const serialized = {
+      name: error.name || "Error",
+      message: error.message,
+    };
+    return {
+      ...serialized,
+      text: formatSerializedWorkerError(serialized),
+    };
+  }
+
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    const constructorName =
+      "constructor" in record &&
+      record.constructor &&
+      typeof record.constructor === "function"
+        ? record.constructor.name
+        : "";
+    const name =
+      typeof record.name === "string" && record.name
+        ? record.name
+        : constructorName || Object.prototype.toString.call(error);
+    const message =
+      typeof record.message === "string" && record.message
+        ? record.message
+        : undefined;
+    const serialized = {
+      name,
+      message,
+      errno: record.errno,
+      code: record.code,
+      path: record.path,
+    };
+    return {
+      ...serialized,
+      text: formatSerializedWorkerError(serialized),
+    };
+  }
+
+  const text = String(error);
+  return {
+    name: "Error",
+    message: text,
+    text,
+  };
+}
+
 function cleanMedia() {
   try {
     const mediaFiles = x2t.FS.readdir("/working/media/");
@@ -869,6 +959,7 @@ async function convert({
   }
 
   let output: Uint8Array | null = null;
+  let readOutputError: SerializedWorkerError | undefined;
   try {
     output = x2t.FS.readFile(toPath);
     if (output && fileTo === "Editor.bin" && fontAliases) {
@@ -884,10 +975,16 @@ async function convert({
     }
   } catch (e) {
     console.error("[x2t.worker] read output failed:", e);
+    readOutputError = serializeWorkerError(e);
   }
 
   if (!output) {
-    throw new Error(`x2t conversion produced no output (${fileFrom} -> ${fileTo})`);
+    throw new X2tWorkerError("x2t conversion produced no output", {
+      stage: "read-output",
+      fileFrom,
+      fileTo,
+      readOutputError,
+    });
   }
 
   const outputMedia = readMedia();
@@ -951,6 +1048,8 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
       id,
       type: "error",
       error: error instanceof Error ? error.message : String(error),
+      errorDetails:
+        error instanceof X2tWorkerError ? error.details : undefined,
     });
   }
 };
