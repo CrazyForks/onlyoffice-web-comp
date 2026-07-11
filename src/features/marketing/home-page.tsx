@@ -84,7 +84,7 @@ export function HomePage() {
               Word、Excel、PPT 编辑器，实现查看、编辑与导出。
             </p>
             <div className="mt-9 flex flex-wrap gap-2">
-              <SiteLinkButton href="/docs/demos">开始使用</SiteLinkButton>
+              <SiteLinkButton href="/docs/demos/single">开始使用</SiteLinkButton>
               <SiteLinkButton href="/docs" variant="secondary">
                 阅读文档
               </SiteLinkButton>

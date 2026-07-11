@@ -1,5 +1,5 @@
 import { converter } from "./x2t";
-import { MockSocket } from "./socket";
+import { MockSocket } from "./runtime-bridge";
 import {
   User,
   Participant,
@@ -9,8 +9,8 @@ import {
   isOfficeXmlSizeLimitExceededError,
 } from "./types";
 import { emptyDocx, emptyPdf, emptyPptx, emptyXlsx } from "./empty";
-import { convertCsvBufferToXlsxBuffer } from "./csv-to-xlsx";
-import { createDocxFromText, createXlsxFromText } from "./plain-text-office";
+import { convertCsvBufferToXlsxBuffer } from "./office-format";
+import { createDocxFromText, createXlsxFromText } from "./office-format";
 import {
   getDocumentType,
   getFileExt,
@@ -30,28 +30,21 @@ import {
   isOnlyOfficeCdnMode,
   type OfficeXmlEventConfig,
 } from "../../const";
-import { allPlugins, featuredPlugins, getPluginsData } from "./plugins";
 import {
   getZipXmlUncompressedSize,
   readZipEntries,
   readZipEntryData,
   writeZipEntries,
   type ZipReplacement,
-} from "./zip";
+} from "./office-format";
+import type { EditorLogCategory, EditorLogLevel } from "./logger";
 
 /**
- * Mock OnlyOffice 协作服务：维护 fsMap（Editor.bin + media），处理 WebSocket 与 /downloadas/ HTTP。
- *
- * 关键链路：
- * 打开 — loadDocument：x2t doc.* → Editor.bin
- * 导出 — captureCurrentDocument + downloadAs → /downloadas/ → resolvePendingExport
- * 保存 — 同 URL 无 pendingExport 时 commitUserSave（UI 已禁用，兜底保留）
+ * @description Mock OnlyOffice 协作服务，维护 Editor.bin、媒体资源和 downloadAs HTTP 管道。
  */
 
 /**
- * programmatic export（downloadAs "bin"）完成时 WebSocket save 的占位 URL。
- * SDK 要求 data 为 truthy 才会标记成功；空字符串会误触发 asc_onError(DirectUrl)。
- * fVg=true 时走 asc_onDownloadUrl，父页 onDownloadAs 为空实现，不会触发浏览器下载。
+ * @description 程序化导出完成时返回给 WebSocket save 的占位 URL，避免触发真实浏览器下载。
  */
 const PROGRAMMATIC_EXPORT_ACK_URL = "onlyoffice://export/ack";
 function mergeBuffers(buffers: Uint8Array[]) {
@@ -65,7 +58,9 @@ function mergeBuffers(buffers: Uint8Array[]) {
   return mergedBuffer;
 }
 
-/** OnlyOffice 画布 bin 魔数；x2t 只接受 XLSY/DOCY/PPTY，非法数据会导致导出失败。 */
+/**
+ * @description OnlyOffice 画布 bin 魔数；x2t 只接受 XLSY/DOCY/PPTY，非法数据会导致导出失败。
+ */
 function isValidEditorBin(data: Uint8Array) {
   if (data.length < 4) {
     return false;
@@ -117,7 +112,6 @@ function createPlainTextOfficeFallback(
   }
 }
 
-const PDF_MAX_OUTPUT_BYTES = 50 * 1024 * 1024;
 const PDF_EOF_MARKER = new TextEncoder().encode("%%EOF");
 
 function indexOfSubarray(haystack: Uint8Array, needle: Uint8Array) {
@@ -138,11 +132,6 @@ function indexOfSubarray(haystack: Uint8Array, needle: Uint8Array) {
 function assertValidPdfOutput(data: Uint8Array, label = "PDF") {
   if (!isPdfBytes(data)) {
     throw new Error(`${label} output is not a valid PDF`);
-  }
-  if (data.byteLength > PDF_MAX_OUTPUT_BYTES) {
-    throw new Error(
-      `${label} output too large (${data.byteLength} bytes); x2t conversion likely corrupt`,
-    );
   }
   const scanLen = Math.min(data.byteLength, 1024 * 1024);
   const tail = data.subarray(data.byteLength - scanLen);
@@ -389,7 +378,9 @@ function rewriteEditorBinUnsupportedMediaRefs(data: Uint8Array) {
   return output;
 }
 
-/** Response 头值须为 ISO-8859-1；中文文件名放在 filename*=UTF-8 段。 */
+/**
+ * @description Response 头值须为 ISO-8859-1，中文文件名放在 filename*=UTF-8 段。
+ */
 function buildContentDisposition(fileName: string): string {
   const encoded = encodeURIComponent(fileName).replace(/['()]/g, escape);
   const ascii = fileName.replace(/[^\x20-\x7E]/g, "_").replace(/"/g, '\\"');
@@ -536,6 +527,366 @@ function getImageExt(mime: string) {
   return subtype === "jpeg" ? "jpg" : subtype;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function getStringField(record: Record<string, unknown> | null, key: string) {
+  const value = record?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function getNumberField(record: Record<string, unknown> | null, key: string) {
+  const value = record?.[key];
+  return typeof value === "number" ? value : undefined;
+}
+
+function getBooleanField(record: Record<string, unknown> | null, key: string) {
+  const value = record?.[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function truncateText(value: string, maxLength = 80) {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+}
+
+function tryParseJson(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed || !/^[{[]/.test(trimmed)) {
+    return value;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function getArrayField(record: Record<string, unknown> | null, key: string) {
+  const value = record?.[key];
+  return Array.isArray(value) ? value : undefined;
+}
+
+function getJsonArrayField(record: Record<string, unknown> | null, key: string) {
+  const value = record?.[key];
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const parsed = tryParseJson(value);
+  return Array.isArray(parsed) ? parsed : undefined;
+}
+
+function getPayloadByteLength(value: unknown): number | undefined {
+  if (value instanceof ArrayBuffer) {
+    return value.byteLength;
+  }
+  if (ArrayBuffer.isView(value)) {
+    return value.byteLength;
+  }
+  if (typeof value === "string") {
+    return value.length;
+  }
+  return undefined;
+}
+
+function describeValue(value: unknown, maxLength = 120): string | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return truncateText(value, maxLength);
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return `array(${value.length})`;
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record).slice(0, 6);
+    return `{${keys.join(", ")}}`;
+  }
+  return typeof value;
+}
+
+function collectTextFragments(
+  value: unknown,
+  fragments: string[] = [],
+  depth = 0,
+) {
+  if (fragments.length >= 3 || depth > 4 || value == null) {
+    return fragments;
+  }
+
+  if (typeof value === "string") {
+    const parsed = tryParseJson(value);
+    if (parsed !== value) {
+      return collectTextFragments(parsed, fragments, depth + 1);
+    }
+    const text = value.trim();
+    if (
+      text.length > 0 &&
+      text.length <= 200 &&
+      /[\p{L}\p{N}\u4e00-\u9fff]/u.test(text)
+    ) {
+      fragments.push(truncateText(text));
+    }
+    return fragments;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value.slice(0, 8)) {
+      collectTextFragments(item, fragments, depth + 1);
+      if (fragments.length >= 3) break;
+    }
+    return fragments;
+  }
+
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const preferredKeys = [
+      "text",
+      "Text",
+      "value",
+      "insert",
+      "m_sText",
+      "data",
+      "items",
+    ];
+    const keys = [
+      ...preferredKeys.filter((key) => key in record),
+      ...Object.keys(record).filter((key) => !preferredKeys.includes(key)),
+    ];
+    for (const key of keys.slice(0, 12)) {
+      collectTextFragments(record[key], fragments, depth + 1);
+      if (fragments.length >= 3) break;
+    }
+  }
+
+  return fragments;
+}
+
+function summarizeLockBlock(block: unknown) {
+  const blocks = normalizeCoAuthoringLockBlocks(block);
+  return {
+    lockCount: blocks.length,
+    locks: blocks.slice(0, 3).map((item) => {
+      if (typeof item === "object" && item !== null) {
+        const record = item as Record<string, unknown>;
+        return {
+          guid: getStringField(record, "guid"),
+          sheetId: record.sheetId ?? record.sheet ?? record.tabId,
+          range: record.range ?? record.bbox ?? record.bounds,
+          raw: describeValue(record),
+        };
+      }
+      return { raw: describeValue(item) };
+    }),
+  };
+}
+
+function getBase64ByteLength(value: string) {
+  const normalized = value.replace(/\s/g, "");
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) {
+    return undefined;
+  }
+  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+  return Math.floor((normalized.length * 3) / 4) - padding;
+}
+
+function summarizeChangePacket(value: unknown) {
+  if (typeof value !== "string") {
+    return {
+      kind: typeof value,
+      byteLength: getPayloadByteLength(value),
+      preview: describeValue(value),
+    };
+  }
+
+  const separatorIndex = value.indexOf(";");
+  if (separatorIndex < 0) {
+    return {
+      kind: "string",
+      charLength: value.length,
+      preview: truncateText(value),
+    };
+  }
+
+  const declaredLength = Number(value.slice(0, separatorIndex));
+  const base64 = value.slice(separatorIndex + 1);
+  const byteLength = getBase64ByteLength(base64);
+
+  return {
+    kind: "binary-change",
+    declaredLength: Number.isFinite(declaredLength) ? declaredLength : undefined,
+    byteLength,
+    byteLengthMatches:
+      Number.isFinite(declaredLength) && byteLength != null
+        ? declaredLength === byteLength
+        : undefined,
+    base64Preview: truncateText(base64, 32),
+  };
+}
+
+function summarizeSaveChanges(record: Record<string, unknown>) {
+  const changes =
+    getJsonArrayField(record, "changes") ??
+    getJsonArrayField(record, "changesData") ??
+    getJsonArrayField(record, "data");
+  const firstChange = changes?.[0] ?? record.change ?? record.data;
+  const parsedFirstChange =
+    typeof firstChange === "string" ? tryParseJson(firstChange) : firstChange;
+  const textPreview = collectTextFragments(changes ?? firstChange);
+  const packets = changes?.map(summarizeChangePacket);
+  const changeBytes =
+    packets?.reduce((total, packet) => total + (packet.byteLength ?? 0), 0) ??
+    getPayloadByteLength(firstChange);
+
+  return {
+    start: getBooleanField(record, "startSaveChanges"),
+    end: getBooleanField(record, "endSaveChanges"),
+    isCoAuthoring: getBooleanField(record, "isCoAuthoring"),
+    isExcel: getBooleanField(record, "isExcel"),
+    deleteIndex: getNumberField(record, "deleteIndex"),
+    unlock: getBooleanField(record, "unlock"),
+    releaseLocks: getBooleanField(record, "releaseLocks"),
+    changesCount: changes?.length,
+    changeBytes,
+    packets: packets?.slice(0, 4),
+    firstChange: describeValue(parsedFirstChange),
+    textPreview,
+  };
+}
+
+function getSaveTypeLabel(value: unknown) {
+  switch (value) {
+    case AscSaveTypes.PartStart:
+      return "PartStart";
+    case AscSaveTypes.Part:
+      return "Part";
+    case AscSaveTypes.Complete:
+      return "Complete";
+    case AscSaveTypes.CompleteAll:
+      return "CompleteAll";
+    default:
+      return value == null ? undefined : String(value);
+  }
+}
+
+function summarizeWsPayload(payloads: unknown[]) {
+  const first = payloads[0];
+  const record = asRecord(first);
+  const data = asRecord(record?.data);
+  const type = getStringField(record, "type");
+  const dataType = getStringField(data, "type");
+  const extraParts: string[] = [];
+  let extra: Record<string, unknown> = {};
+
+  if (type === "saveChanges" && record) {
+    const saveSummary = summarizeSaveChanges(record);
+    extra = saveSummary;
+    if (saveSummary.changesCount != null) {
+      extraParts.push(`changes=${saveSummary.changesCount}`);
+    }
+    if (saveSummary.changeBytes != null) {
+      extraParts.push(`bytes=${saveSummary.changeBytes}`);
+    }
+    if (saveSummary.start || saveSummary.end) {
+      extraParts.push(
+        `${saveSummary.start ? "start" : ""}${saveSummary.end ? "+end" : ""}`,
+      );
+    }
+    if (saveSummary.isExcel) {
+      extraParts.push("excel");
+    }
+    if (saveSummary.deleteIndex != null) {
+      extraParts.push(`deleteIndex=${saveSummary.deleteIndex}`);
+    }
+    if (saveSummary.textPreview.length > 0) {
+      extraParts.push(`text="${saveSummary.textPreview.join(" | ")}"`);
+    }
+  } else if (type === "getLock" && record) {
+    const lockSummary = summarizeLockBlock(record.block);
+    extra = lockSummary;
+    extraParts.push(`locks=${lockSummary.lockCount}`);
+    const firstLock = lockSummary.locks[0];
+    if (firstLock?.guid) {
+      extraParts.push(`guid=${firstLock.guid}`);
+    } else if (firstLock?.raw) {
+      extraParts.push(`block=${firstLock.raw}`);
+    }
+  } else if (
+    (type === "getLock" || type === "releaseLock") &&
+    record?.locks &&
+    typeof record.locks === "object"
+  ) {
+    const lockKeys = Object.keys(record.locks as Record<string, unknown>);
+    extra = { lockCount: lockKeys.length, lockKeys: lockKeys.slice(0, 3) };
+    extraParts.push(`locks=${lockKeys.length}`);
+    if (lockKeys[0]) extraParts.push(`key=${truncateText(lockKeys[0], 32)}`);
+  } else if (type === "unSaveLock" && record) {
+    const index = getNumberField(record, "index");
+    const syncChangesIndex = getNumberField(record, "syncChangesIndex");
+    extra = { index, syncChangesIndex };
+    if (index != null) extraParts.push(`index=${index}`);
+    if (syncChangesIndex != null) {
+      extraParts.push(`sync=${syncChangesIndex}`);
+    }
+  }
+
+  const labelParts = [
+    type ?? typeof first,
+    dataType,
+    getStringField(data, "status"),
+  ].filter(Boolean);
+  const label = [
+    labelParts.join(" / "),
+    extraParts.length > 0 ? `(${extraParts.join(", ")})` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return {
+    label,
+    type,
+    dataType,
+    status: getStringField(data, "status"),
+    payloadCount: payloads.length,
+    ...extra,
+  };
+}
+
+function summarizeDownloadCommand(
+  cmd: Record<string, unknown>,
+  buffer: ArrayBuffer,
+) {
+  const outputFormat = getNumberField(cmd, "outputformat");
+  const filetype =
+    outputFormat == null ? undefined : extensionFromOutputFormat(outputFormat);
+  const saveType = getSaveTypeLabel(cmd.savetype);
+
+  return {
+    label: [
+      saveType,
+      filetype ? `to ${filetype}` : undefined,
+      cmd.isSaveAs ? "saveAs" : undefined,
+    ]
+      .filter(Boolean)
+      .join(" "),
+    saveType,
+    outputFormat,
+    filetype,
+    title: getStringField(cmd, "title"),
+    byteLength: buffer.byteLength,
+  };
+}
+
 export class EditorServer {
   private id = "";
   private sockets = new Set<MockSocket>();
@@ -557,23 +908,32 @@ export class EditorServer {
   private loadPromise: Promise<void> | null = null;
   private loadBlocked = false;
 
-  private file: File | null = null;
   private fileType: string = "docx";
   private title: string = "";
   private fsMap: Map<string, Uint8Array> = new Map();
   private urlsMap: Map<string, string> = new Map();
 
   private downloadId: string = "";
-  /** downloadAs multipart 分片缓冲；保存与导出共用 HTTP 管道，需与 pendingExport 配合区分意图。 */
+  /**
+   * @description downloadAs multipart 分片缓冲；保存与导出共用 HTTP 管道，需与 pendingExport 配合区分意图。
+   */
   private downloadParts: Uint8Array[] = [];
-  /** 当前 downloadAs 请求的 cmd（含 outputformat / isSaveAs / title）。 */
+  /**
+   * @description 当前 downloadAs 请求的 cmd（含 outputformat / isSaveAs / title）。
+   */
   private downloadCmd: Record<string, unknown> | null = null;
-  /** 另存为 GET 响应 Content-Disposition 使用的文件名。 */
+  /**
+   * @description 另存为 GET 响应 Content-Disposition 使用的文件名。
+   */
   private downloadFileNames = new Map<string, string>();
-  /** 用户保存 downloadAs 进行中时阻塞 export，避免分片交错污染 Editor.bin。 */
+  /**
+   * @description 用户保存 downloadAs 进行中时阻塞 export，避免分片交错污染 Editor.bin。
+   */
   private savingDone: Promise<void> = Promise.resolve();
   private finishSaving: (() => void) | null = null;
-  /** export() 调用 downloadAs("bin") 后等待 resolvePendingExport 完成。 */
+  /**
+   * @description export() 调用 downloadAs("bin") 后等待 resolvePendingExport 完成。
+   */
   private pendingExport:
     | {
         resolve: (snapshot: ReturnType<EditorServer["getDocumentSnapshot"]>) => void;
@@ -591,6 +951,21 @@ export class EditorServer {
     this.options = options;
     this.handleConnect = this.handleConnect.bind(this);
     this.handleMessage = this.handleMessage.bind(this);
+  }
+
+  private logRaw(
+    level: EditorLogLevel,
+    category: EditorLogCategory,
+    message: string,
+    consoleArgs: unknown[],
+    ...details: unknown[]
+  ) {
+    const logger = this.options.logger;
+    if (logger) {
+      logger.raw(level, category, message, consoleArgs, ...details);
+      return;
+    }
+    console[level](...consoleArgs);
   }
 
   setOfficeXmlEventConfig(config?: OfficeXmlEventConfig) {
@@ -623,7 +998,9 @@ export class EditorServer {
     }
   }
 
-  /** CDN iframe 与主站跨域：Editor.bin 必须用相对 /cache/files/，由 bridge 代拉。 */
+  /**
+   * @description CDN iframe 与主站跨域：Editor.bin 必须用相对 /cache/files/，由 bridge 代拉。
+   */
   private getCacheFileUrl(name: string) {
     return `/cache/files/data/${this.id}/${name}`;
   }
@@ -658,7 +1035,6 @@ export class EditorServer {
     }
 
     this.id = "";
-    this.file = null;
     this.fileType = "docx";
     this.title = "";
     this.fsMap.clear();
@@ -682,7 +1058,6 @@ export class EditorServer {
     const title = ensureTitleWithExtension(fileName || file.name, this.fileType);
     const documentType = getDocumentType(this.fileType);
     this.id = randomId();
-    this.file = file;
     this.title = title;
     const buffer = await file.arrayBuffer();
     const sizeLimitError = this.getOfficeXmlSizeLimitError(
@@ -710,7 +1085,6 @@ export class EditorServer {
   openNew(fileType?: string) {
     this.fileType = fileType || "docx";
     this.id = randomId();
-    this.file = null;
     this.loadPromise = null;
     this.title = ensureTitleWithExtension("New Document", this.fileType);
     const documentType = getDocumentType(this.fileType);
@@ -786,7 +1160,9 @@ export class EditorServer {
     };
   }
 
-  /** 另存为产物 blob URL，cache GET 失败时供 getFile 回退下载。 */
+  /**
+   * @description 另存为产物 blob URL，cache GET 失败时供 getFile 回退下载。
+   */
   getStoredOutputUrl(outputName: string) {
     return this.urlsMap.get(outputName) ?? null;
   }
@@ -862,7 +1238,9 @@ export class EditorServer {
     return rewriteEditorBinUnsupportedMediaRefs(binData);
   }
 
-  /** 用户保存：更新 Editor.bin 并通知接入层，不触发浏览器下载。 */
+  /**
+   * @description 用户保存：更新 Editor.bin 并通知接入层，不触发浏览器下载。
+   */
   commitUserSave(data: Uint8Array) {
     if (!isValidEditorBin(data)) {
       console.warn(
@@ -891,9 +1269,7 @@ export class EditorServer {
   }
 
   /**
-   * 导出链路：register pendingExport → trigger downloadAs("bin")
-   * → iframe XHR/fetch 命中 /downloadas/ → resolvePendingExport 写入 Editor.bin。
-   * 开始前 await savingDone 并清空 downloadParts，避免与保存分片冲突。
+   * @description 捕获当前文档快照；通过 downloadAs("bin") 让 iframe 把最新 Editor.bin 回传到 mock 服务。
    */
   async captureCurrentDocument(
     trigger: () => void,
@@ -931,7 +1307,9 @@ export class EditorServer {
     });
   }
 
-  /** 打开文档：x2t 将 doc.{fileType} 转为 Editor.bin 写入 fsMap，供 iframe 加载。 */
+  /**
+   * @description 打开文档：x2t 将 doc.{fileType} 转为 Editor.bin 写入 fsMap，供 iframe 加载。
+   */
   private async loadDocument(
     buffer: ArrayBuffer | (() => Promise<ArrayBuffer>),
     fileType: string,
@@ -986,13 +1364,16 @@ export class EditorServer {
     this.assertOfficeXmlSizeWithinLimit(buffer, fileType);
     buffer = await this.rewriteUnsupportedPptxImages(buffer, fileType);
     const { formatFrom, formatTo } = getX2tConvertFormats(fileType);
-    const result = await converter.convert({
-      data: buffer,
-      fileFrom: "doc." + fileType,
-      fileTo: "Editor.bin",
-      formatFrom,
-      formatTo,
-    });
+    const result = await converter.convert(
+      {
+        data: buffer,
+        fileFrom: "doc." + fileType,
+        fileTo: "Editor.bin",
+        formatFrom,
+        formatTo,
+      },
+      this.options.logger,
+    );
     return {
       output: result.output,
       media: result.media,
@@ -1022,7 +1403,10 @@ export class EditorServer {
     }
 
     const { totalSize, entryCount } = getZipXmlUncompressedSize(entries);
-    console.log("onlyoffice-totalSize:", `${(totalSize / 1024 / 1024).toFixed(2)} MB`);
+    this.logRaw("error", "operation", "office xml total size", [
+      "onlyoffice-totalSize:",
+      `${(totalSize / 1024 / 1024).toFixed(2)} MB`,
+    ]);
     if (totalSize <= this.officeXmlEventConfig.limitBytes) {
       return null;
     }
@@ -1150,14 +1534,17 @@ export class EditorServer {
     const { formatFrom, formatTo } = getX2tConvertFormats("csv");
 
     try {
-      const result = await converter.convert({
-        data: convertBuffer,
-        fileFrom: "doc.csv",
-        fileTo: "Editor.bin",
-        formatFrom,
-        formatTo,
-        ...getX2tCsvConvertOptions(convertBuffer),
-      });
+      const result = await converter.convert(
+        {
+          data: convertBuffer,
+          fileFrom: "doc.csv",
+          fileTo: "Editor.bin",
+          formatFrom,
+          formatTo,
+          ...getX2tCsvConvertOptions(convertBuffer),
+        },
+        this.options.logger,
+      );
       if (result.output?.byteLength) {
         return { output: result.output, media: result.media };
       }
@@ -1185,13 +1572,17 @@ export class EditorServer {
     this.setEditorBinUrl(data);
   }
 
-  /** 与 Document Server 一致：/cache/files/data/{id}/output.{ext}（站点根绝对路径，便于 iframe 代理命中） */
+  /**
+   * @description 与 Document Server 一致：/cache/files/data/{id}/output.{ext}（站点根绝对路径，便于 iframe 代理命中）
+   */
   private buildDownloadFileUrl(outputName: string, downloadFileName: string) {
     const params = new URLSearchParams({ filename: downloadFileName });
     return `/cache/files/data/${this.id}/${outputName}?${params}`;
   }
 
-  /** 另存为：写入 fsMap，返回带文件名的 HTTP 路径（非 blob URL）。 */
+  /**
+   * @description 另存为：写入 fsMap，返回带文件名的 HTTP 路径（非 blob URL）。
+   */
   private storeDownloadOutput(
     outputName: string,
     data: Uint8Array,
@@ -1207,8 +1598,7 @@ export class EditorServer {
   }
 
   /**
-   * 「文件 → 另存为」常 POST Editor.bin + cmd.outputformat，由服务端 x2t 转换。
-   * 仅 isSaveAs 或非法 bin 魔数不足以覆盖该路径。
+   * @description 判断 downloadAs 请求是否属于「另存为」输出；该路径通常需要服务端 x2t 转换。
    */
   private isDownloadAsOutput(
     cmd: Record<string, unknown> | null,
@@ -1236,15 +1626,18 @@ export class EditorServer {
     const media = this.getExportSafeMedia();
     const themes = this.getStoredThemes();
     const { formatFrom, formatTo } = getX2tExportFormats(filetype, this.fileType);
-    const result = await converter.convert({
-      data: binData.slice().buffer,
-      fileFrom: "Editor.bin",
-      fileTo: `doc.${filetype}`,
-      formatFrom,
-      formatTo,
-      media,
-      themes,
-    });
+    const result = await converter.convert(
+      {
+        data: binData.slice().buffer,
+        fileFrom: "Editor.bin",
+        fileTo: `doc.${filetype}`,
+        formatFrom,
+        formatTo,
+        media,
+        themes,
+      },
+      this.options.logger,
+    );
 
     if (!result.output?.byteLength) {
       throw new Error(`Failed to convert Editor.bin to ${filetype}`);
@@ -1253,13 +1646,17 @@ export class EditorServer {
     return result.output;
   }
 
-  /** Web 表格 PDF 另存为 POST 的是渲染器 Memory 流，需回退 fsMap 中的 Editor.bin。 */
+  /**
+   * @description Web 表格 PDF 另存为 POST 的是渲染器 Memory 流，需回退 fsMap 中的 Editor.bin。
+   */
   private resolveEditorBinSource(input: Uint8Array): Uint8Array | null {
     if (isValidEditorBin(input)) {
       return input;
     }
 
-    // 禁止在 downloadAs 中调用 asc_nativeGetFile（getFreshEditorBin）：SDK 等 HTTP 响应时会死锁。
+    /**
+     * @description downloadAs 等 HTTP 响应时不能调用 asc_nativeGetFile，否则 SDK 会互相等待。
+     */
     const cached = this.fsMap.get("Editor.bin");
     if (cached && isValidEditorBin(cached)) {
       return cached;
@@ -1268,8 +1665,7 @@ export class EditorServer {
   }
 
   /**
-   * Editor.bin + pdf.bin（Web SDK Memory 流）→ PDF。
-   * WASM x2t 无 JS 引擎，表格/文档 PDF 另存为必须走此路径（CryptPad 同款）。
+   * @description 将 Editor.bin 和 Web SDK 渲染器 Memory 流组合导出为 PDF。
    */
   private async convertEditorBinToPdf(
     binData: Uint8Array,
@@ -1281,14 +1677,17 @@ export class EditorServer {
     const { formatFrom, formatTo } = getX2tExportFormats("pdf", this.fileType);
 
     if (pdfRendererStream?.byteLength) {
-      const result = await converter.convert({
-        data: binData.slice().buffer,
-        fileFrom: "output.bin",
-        fileTo: "output.pdf",
-        media,
-        themes,
-        pdfBin: pdfRendererStream,
-      });
+      const result = await converter.convert(
+        {
+          data: binData.slice().buffer,
+          fileFrom: "output.bin",
+          fileTo: "output.pdf",
+          media,
+          themes,
+          pdfBin: pdfRendererStream,
+        },
+        this.options.logger,
+      );
 
       if (!result.output?.byteLength) {
         throw new Error("Failed to convert Editor.bin + pdf.bin to PDF");
@@ -1298,15 +1697,18 @@ export class EditorServer {
       return result.output;
     }
 
-    const result = await converter.convert({
-      data: binData.slice().buffer,
-      fileFrom: "Editor.bin",
-      fileTo: "doc.pdf",
-      formatFrom,
-      formatTo,
-      media,
-      themes,
-    });
+    const result = await converter.convert(
+      {
+        data: binData.slice().buffer,
+        fileFrom: "Editor.bin",
+        fileTo: "doc.pdf",
+        formatFrom,
+        formatTo,
+        media,
+        themes,
+      },
+      this.options.logger,
+    );
 
     if (!result.output?.byteLength) {
       throw new Error("Failed to convert Editor.bin to PDF");
@@ -1385,7 +1787,9 @@ export class EditorServer {
     window.clearTimeout(pendingExport.timer);
     this.pendingExport = null;
 
-    // 校验魔数后再写入 fsMap，避免脏分片进入 x2t 导出链路。
+    /**
+     * @description 校验魔数后再写入 fsMap，避免脏分片进入 x2t 导出链路。
+     */
     if (!isValidEditorBin(data)) {
       pendingExport.reject(
         new Error("OnlyOffice export returned invalid document data"),
@@ -1465,13 +1869,13 @@ export class EditorServer {
   }
 
   handleConnect({ socket }: { socket: MockSocket }) {
-    console.log("connect: ", socket);
+    this.logRaw("log", "socket", "connect", ["connect: ", socket]);
     this.registerSocketTransport(socket);
     this.sendCoAuthoringHandshake(socket);
   }
 
   handleDisconnect({ socket }: { socket: MockSocket }) {
-    console.log("disconnect: ", socket);
+    this.logRaw("log", "socket", "disconnect", ["disconnect: ", socket]);
 
     const handler = this.messageHandlers.get(socket);
     if (handler) {
@@ -1518,14 +1922,23 @@ export class EditorServer {
       data: {
         type: "imgurls",
         status: "ok",
-        // SDK 用 $dc(error) 判断是否弹错；缺省 undefined → qD（未知错误）
+        /**
+         * @description SDK 用 $dc(error) 判断是否弹错；缺省 undefined 会变成未知错误。
+         */
         data: { urls, error: 0 },
       },
     });
   }
 
   private sendTo(socket: MockSocket, ...msg: unknown[]) {
-    console.log("[ws] >> ", ...msg);
+    const summary = summarizeWsPayload(msg);
+    this.logRaw(
+      "log",
+      "socket",
+      `ws outgoing: ${summary.label}`,
+      ["[ws] >> ", ...msg],
+      summary,
+    );
     socket.server.emit("message", ...msg);
   }
 
@@ -1540,7 +1953,14 @@ export class EditorServer {
     msg: Record<string, unknown>,
     ...args: unknown[]
   ) {
-    console.log("[ws] << ", msg, args);
+    const incomingSummary = summarizeWsPayload([msg, ...args]);
+    this.logRaw(
+      "log",
+      "socket",
+      `ws incoming: ${incomingSummary.label}`,
+      ["[ws] << ", msg, args],
+      incomingSummary,
+    );
 
     const send = (...payload: unknown[]) => this.sendTo(socket, ...payload);
     const { sessionId, participants, user, client } = this;
@@ -1560,8 +1980,6 @@ export class EditorServer {
           sessionId: sessionId,
           participants: participants,
           locks: [],
-          //   changes: changes,
-          //   changesIndex: 0,
           indexUser: 1,
           buildVersion: client.buildVersion || "9.3.0",
           buildNumber: client.buildNumber || 9,
@@ -1664,18 +2082,12 @@ export class EditorServer {
   }
 
   /**
-   * Mock 协作 HTTP 入口。OnlyOffice iframe 内 XHR/fetch 被代理到此。
-   *
-   * downloadAs 双路径（同一 URL，靠 pendingExport 区分）：
-   * - 有 pendingExport → 导出：resolvePendingExport，写入 Editor.bin 供 x2t
-   * - 无 pendingExport → 保存：commitUserSave（UI 保存已禁用，保留兜底）
+   * @description Mock 协作 HTTP 入口，OnlyOffice iframe 内 XHR/fetch 会被代理到这里。
    */
   async handleRequest(req: Request) {
     const u = new URL(req.url);
 
     const { id: key } = this;
-    // console.log("[msg] server: ", u, key);
-
     const cacheMatch = u.pathname.match(/\/cache\/files\/data\/([^/]+)\/(.+)$/);
     if (cacheMatch && req.method === "GET") {
       const [, , rawName] = cacheMatch;
@@ -1715,7 +2127,14 @@ export class EditorServer {
       >;
       const buffer = await req.arrayBuffer();
 
-      console.log("downloadAs -> ", cmd, buffer);
+      const downloadSummary = summarizeDownloadCommand(cmd, buffer);
+      this.logRaw(
+        "log",
+        "download",
+        `downloadAs chunk: ${downloadSummary.label || "unknown"}`,
+        ["downloadAs -> ", cmd, buffer],
+        downloadSummary,
+      );
 
       if (
         cmd.savetype === AscSaveTypes.PartStart ||
@@ -1776,7 +2195,9 @@ export class EditorServer {
           };
         }
 
-        // 用户保存（Ctrl+S / 工具栏保存）：保留 bin，走 EventBus，不触发浏览器下载。
+        /**
+         * @description 用户保存时保留 Editor.bin 并走 EventBus，不触发浏览器下载。
+         */
         this.commitUserSave(input);
         this.endSaving();
         return {
@@ -1801,7 +2222,10 @@ export class EditorServer {
         try {
           result = await download();
         } catch (err) {
-          console.error("[EditorServer] downloadAs failed:", err);
+          this.logRaw("error", "download", "downloadAs failed", [
+            "[EditorServer] downloadAs failed:",
+            err,
+          ]);
           this.endSaving();
           result = {
             status: "err",
@@ -1816,7 +2240,9 @@ export class EditorServer {
         isFinalChunk = true;
       };
 
-      // OnlyOffice downloadAs 按 PartStart → Part* → Complete(All) 分片 POST。
+      /**
+       * @description OnlyOffice downloadAs 按 PartStart、Part、Complete/CompleteAll 分片 POST。
+       */
       switch (cmd.savetype) {
         case AscSaveTypes.PartStart:
           if (!this.pendingExport) {
@@ -1842,7 +2268,9 @@ export class EditorServer {
           break;
       }
 
-      // programmatic export 广播占位 URL，让 SDK 标记成功但不触发 getFile 下载。
+      /**
+       * @description 程序化导出广播占位 URL，让 SDK 标记成功但不触发 getFile 下载。
+       */
       if (isFinalChunk) {
         const { downloadUrl, filetype, status, error } = result;
 
@@ -1879,17 +2307,6 @@ export class EditorServer {
       const pathname = "media/" + filename;
       const url = this.addMedia(filename, data, mime);
       return Response.json({ [pathname]: url });
-    }
-
-    if (u.pathname == "/plugins.json") {
-      const state = this.options.getState?.();
-      if (state?.plugins == "none") {
-        return Response.json({ url: "", pluginsData: [], autostart: [] });
-      }
-      if (state?.plugins == "all") {
-        return Response.json(getPluginsData(allPlugins));
-      }
-      return Response.json(getPluginsData(featuredPlugins));
     }
 
     return null;

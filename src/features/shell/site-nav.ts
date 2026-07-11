@@ -21,7 +21,7 @@ export const SITE_NAV: SiteNavItem[] = [
       (pathname.startsWith("/docs/") && !pathname.startsWith("/docs/demos")),
   },
   {
-    href: "/docs/demos",
+    href: "/docs/demos/single",
     label: "示例",
     isActive: (pathname) => pathname.startsWith("/docs/demos"),
   },

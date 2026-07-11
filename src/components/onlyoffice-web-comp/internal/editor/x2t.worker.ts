@@ -1,23 +1,22 @@
 /// <reference lib="webworker" />
 
 import { AvsFileType, X2tConvertParams, X2tConvertResult } from "./types";
-import { loadX2tPdfFonts } from "./x2t-pdf-fonts";
+import { loadX2tPdfFonts } from "./x2t-assets";
 import {
   fetchMaybeBrotliAsset,
   fetchMaybeBrotliScript,
-} from "./fetch-brotli";
+} from "./x2t-assets";
 import { getStaticResource, resolveSiteUrl } from "../../const";
 
 /**
- * X2T Converter Web Worker
- *
- * This worker handles CPU-intensive document conversion operations
- * off the main thread to prevent UI blocking.
+ * @description x2t 转换 worker，在后台线程执行文档转换，避免阻塞主界面。
  */
 
 /* eslint-disable no-restricted-globals */
 
-// Worker 内用 origin 拼绝对 URL（见 STATIC_RESOURCE.x2t）
+/**
+ * @description Worker 内使用当前 origin 拼接 x2t 静态资源绝对地址。
+ */
 const X2T_ORIGIN = self.location.origin;
 
 let x2t: any = null;
@@ -120,7 +119,9 @@ function rewriteFontText(text: string, aliases?: Record<string, string>) {
   let output = text;
   for (const [from, to] of entries) {
     const escaped = from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // 避免「仿宋」替换命中已是「仿宋_GB2312」的前缀，产生 _GB2312_GB2312
+    /**
+     * @description 避免「仿宋」替换命中已是「仿宋_GB2312」的前缀，产生 _GB2312_GB2312。
+     */
     const suffix =
       to.startsWith(from) && to.length > from.length
         ? to.slice(from.length).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -414,8 +415,7 @@ async function sanitizeDocxForX2t(data: ArrayBuffer, fileFrom: string) {
 }
 
 /**
- * 在 Worker 全局作用域执行 Emscripten 脚本。
- * classic worker 用 importScripts；module worker 用间接 eval（全局作用域）。
+ * @description 在 Worker 全局作用域执行 Emscripten 脚本；classic worker 用 importScripts，module worker 用间接 eval。
  */
 function executeEmscriptenScript(scriptSource: string): void {
   if (typeof importScripts === "function") {
@@ -438,12 +438,14 @@ function executeEmscriptenScript(scriptSource: string): void {
     }
   }
 
-  // Module worker 不支持 importScripts；间接 eval 在 Worker 全局作用域执行。
+  /**
+   * @description Module worker 不支持 importScripts，因此使用间接 eval 在 Worker 全局作用域执行。
+   */
   (0, eval)(scriptSource);
 }
 
 /**
- * Initialize x2t module in Worker context
+ * @description 在 Worker 上下文初始化 x2t 模块。
  */
 function getWorkerStaticResource(params?: X2tConvertParams) {
   return params?.staticResource ?? getStaticResource();
@@ -471,19 +473,16 @@ async function initX2t(params?: X2tConvertParams): Promise<void> {
 
   x2t = (self as any).Module;
 
-  // Wait for WASM runtime initialization
   await new Promise<void>((resolve) => {
     x2t.onRuntimeInitialized = () => resolve();
   });
 
-  // Create working directories
   try {
     x2t.FS.mkdir("/working");
     x2t.FS.mkdir("/working/media");
     x2t.FS.mkdir("/working/fonts");
     x2t.FS.mkdir("/working/themes");
   } catch (err) {
-    // Directories may already exist
     console.error("[x2t.worker] mkdir error:", err);
   }
 
@@ -491,7 +490,7 @@ async function initX2t(params?: X2tConvertParams): Promise<void> {
 }
 
 /**
- * Ensure x2t is initialized before conversion
+ * @description 转换前确保 x2t 已完成初始化。
  */
 async function ensureInit(params?: X2tConvertParams): Promise<void> {
   const staticResource = getWorkerStaticResource(params);
@@ -507,7 +506,7 @@ async function ensureInit(params?: X2tConvertParams): Promise<void> {
 }
 
 /**
- * Clean up temporary files after conversion
+ * @description 转换完成后清理临时文件。
  */
 function cleanupFiles(files: string[]): void {
   for (const file of files) {
@@ -520,6 +519,96 @@ function cleanupFiles(files: string[]): void {
   cleanMedia();
   cleanFonts();
   cleanThemes();
+}
+
+type SerializedWorkerError = {
+  name: string;
+  message?: string;
+  errno?: unknown;
+  code?: unknown;
+  path?: unknown;
+  text: string;
+};
+
+type X2tWorkerErrorDetails = {
+  stage: string;
+  fileFrom?: string;
+  fileTo?: string;
+  readOutputError?: SerializedWorkerError;
+};
+
+class X2tWorkerError extends Error {
+  constructor(
+    message: string,
+    public readonly details: X2tWorkerErrorDetails,
+  ) {
+    super(message);
+    this.name = "X2tWorkerError";
+  }
+}
+
+function formatSerializedWorkerError(error: Omit<SerializedWorkerError, "text">) {
+  const message = error.message ? `: ${error.message}` : "";
+  const details = [
+    ["errno", error.errno],
+    ["code", error.code],
+    ["path", error.path],
+  ]
+    .filter(([, value]) => value != null)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(", ");
+  return details
+    ? `${error.name}${message} (${details})`
+    : `${error.name}${message}`;
+}
+
+function serializeWorkerError(error: unknown): SerializedWorkerError {
+  if (error instanceof Error) {
+    const serialized = {
+      name: error.name || "Error",
+      message: error.message,
+    };
+    return {
+      ...serialized,
+      text: formatSerializedWorkerError(serialized),
+    };
+  }
+
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    const constructorName =
+      "constructor" in record &&
+      record.constructor &&
+      typeof record.constructor === "function"
+        ? record.constructor.name
+        : "";
+    const name =
+      typeof record.name === "string" && record.name
+        ? record.name
+        : constructorName || Object.prototype.toString.call(error);
+    const message =
+      typeof record.message === "string" && record.message
+        ? record.message
+        : undefined;
+    const serialized = {
+      name,
+      message,
+      errno: record.errno,
+      code: record.code,
+      path: record.path,
+    };
+    return {
+      ...serialized,
+      text: formatSerializedWorkerError(serialized),
+    };
+  }
+
+  const text = String(error);
+  return {
+    name: "Error",
+    message: text,
+    text,
+  };
 }
 
 function cleanMedia() {
@@ -633,7 +722,7 @@ function writePdfBin(pdfBin?: Uint8Array) {
 }
 
 /**
- * Read media files from the working directory
+ * @description 从工作目录读取转换生成的媒体文件。
  */
 function readMedia(): { [key: string]: Uint8Array } {
   const media: { [key: string]: Uint8Array } = {};
@@ -762,7 +851,7 @@ ${content}
 }
 
 /**
- * Convert document from one format to another
+ * @description 将文档从一种格式转换为另一种格式。
  */
 async function convert({
   data,
@@ -869,8 +958,8 @@ async function convert({
     console.error("ccall", e);
   }
 
-  // Read output file
   let output: Uint8Array | null = null;
+  let readOutputError: SerializedWorkerError | undefined;
   try {
     output = x2t.FS.readFile(toPath);
     if (output && fileTo === "Editor.bin" && fontAliases) {
@@ -886,17 +975,21 @@ async function convert({
     }
   } catch (e) {
     console.error("[x2t.worker] read output failed:", e);
+    readOutputError = serializeWorkerError(e);
   }
 
   if (!output) {
-    throw new Error(`x2t conversion produced no output (${fileFrom} -> ${fileTo})`);
+    throw new X2tWorkerError("x2t conversion produced no output", {
+      stage: "read-output",
+      fileFrom,
+      fileTo,
+      readOutputError,
+    });
   }
 
-  // Read media files
   const outputMedia = readMedia();
   const outputThemes = readDirectoryFiles("/working/themes", "themes");
 
-  // Cleanup temporary files
   setTimeout(() => {
     cleanupFiles(files);
   });
@@ -904,7 +997,9 @@ async function convert({
   return { output, media: outputMedia, themes: outputThemes };
 }
 
-// Message types
+/**
+ * @description 主线程发送给 x2t worker 的消息结构。
+ */
 interface WorkerMessage {
   id?: number;
   type: "convert";
@@ -912,7 +1007,7 @@ interface WorkerMessage {
 }
 
 /**
- * Handle incoming messages from main thread
+ * @description 处理主线程发来的 worker 消息。
  */
 self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
   const { id, type, payload } = event.data;
@@ -920,11 +1015,12 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
   try {
     switch (type) {
       case "convert": {
-        // Ensure x2t is initialized before conversion
         await ensureInit(payload);
         const result = await convert(payload);
 
-        // Use Transferable objects for zero-copy transfer
+        /**
+         * @description 使用 Transferable 返回大块二进制结果，降低复制成本。
+         */
         const transferables: Transferable[] = [];
         if (result.output) {
           transferables.push(result.output.buffer);
@@ -952,9 +1048,13 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
       id,
       type: "error",
       error: error instanceof Error ? error.message : String(error),
+      errorDetails:
+        error instanceof X2tWorkerError ? error.details : undefined,
     });
   }
 };
 
-// Signal that worker is ready
+/**
+ * @description 通知主线程 worker 已加载。
+ */
 self.postMessage({ type: "ready" });

@@ -165,11 +165,9 @@ function encodeCsvBuffer(text: string, withUtf8Bom: boolean) {
   return withBom.slice().buffer;
 }
 
-function parseCsvLine(line: string, delimiter: string) {
-  return parseCsvText(line, delimiter)[0] ?? [];
-}
-
-/** RFC 4180 风格解析，支持引号内换行与逗号。 */
+/**
+ * @description RFC 4180 风格解析，支持引号内换行与逗号。
+ */
 function parseCsvText(text: string, delimiter: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
@@ -257,7 +255,9 @@ function toCsvFormulaCell(value: string) {
   return `="${value.replace(/"/g, '""')}"`;
 }
 
-/** 仅包裹「以数字结尾且不像日期/时间」的单元格，避免误包 2018/9/6 9:32 引发 x2t 异常。 */
+/**
+ * @description 仅包裹「以数字结尾且不像日期/时间」的单元格，避免误包 2018/9/6 9:32 引发 x2t 异常。
+ */
 function shouldApplyCsvFormulaWrap(value: string) {
   if (!/[0-9]$/.test(value)) {
     return false;
@@ -277,7 +277,9 @@ function getCsvDelimiterChar(delimiter: number) {
   return ",";
 }
 
-/** 引号内换行会导致按行 split 破坏结构；物理行数明显多于逻辑行数即视为复杂 CSV。 */
+/**
+ * @description 引号内换行会导致按行 split 破坏结构；物理行数明显多于逻辑行数即视为复杂 CSV。
+ */
 export function isMultilineCsv(buffer: ArrayBuffer) {
   const csvEncoding = detectX2tCsvEncoding(buffer);
   const delimiter = getCsvDelimiterChar(
@@ -289,7 +291,9 @@ export function isMultilineCsv(buffer: ArrayBuffer) {
   return physicalLines > logicalRows + 2;
 }
 
-/** 解析 CSV 为二维数组，供 xlsx 兜底转换等场景复用。 */
+/**
+ * @description 解析 CSV 为二维数组，供 xlsx 兜底转换等场景复用。
+ */
 export function parseCsvBuffer(buffer: ArrayBuffer) {
   const csvEncoding = detectX2tCsvEncoding(buffer);
   const delimiter = getCsvDelimiterChar(
@@ -299,8 +303,8 @@ export function parseCsvBuffer(buffer: ArrayBuffer) {
 }
 
 /**
- * x2t CSV 解析 bug：某列单元格以 ASCII 数字结尾时，下一列会误走 DateReader 并崩溃
- *（如 login1.csv 的「用户3」+「2018/9/6 9:32」）。用 ="value" 包裹前一格可绕过。
+ * @description x2t CSV 解析 bug：某列单元格以 ASCII 数字结尾时，下一列会误走 DateReader 并崩溃
+ * （如 login1.csv 的「用户3」+「2018/9/6 9:32」）。用 ="value" 包裹前一格可绕过。
  */
 export function sanitizeCsvBufferForX2t(buffer: ArrayBuffer) {
   const csvEncoding = detectX2tCsvEncoding(buffer);
@@ -334,7 +338,9 @@ function getFirstCsvLine(text: string) {
   return newline === -1 ? text : text.slice(0, newline);
 }
 
-/** Detect delimiter from the first CSV row. */
+/**
+ * @description 根据 CSV 第一行推断分隔符。
+ */
 export function detectX2tCsvDelimiter(buffer: ArrayBuffer, encoding: number) {
   const line = getFirstCsvLine(decodeCsvSample(buffer, encoding));
   const counts = { comma: 0, semicolon: 0, tab: 0 };
@@ -365,7 +371,9 @@ export function detectX2tCsvDelimiter(buffer: ArrayBuffer, encoding: number) {
   return X2T_CSV_DELIMITER_COMMA;
 }
 
-/** Detect OnlyOffice x2t CSV encoding index from BOM / byte patterns. */
+/**
+ * @description 根据 BOM 和字节特征推断 OnlyOffice x2t CSV 编码索引。
+ */
 export function detectX2tCsvEncoding(buffer: ArrayBuffer) {
   const bytes = new Uint8Array(buffer);
   if (
@@ -387,7 +395,10 @@ export function getX2tCsvConvertOptions(buffer: ArrayBuffer) {
   };
 }
 
-/** @param sourceFileType 源文档类型（如 xlsx）；导出 pdf 等目标格式时必须传入，否则会误用 CANVAS_WORD。 */
+/**
+ * @description 获取 x2t 导出格式；导出 pdf 等目标格式时需要源文档类型，否则会误用 CANVAS_WORD。
+ * @param sourceFileType 源文档类型，例如 xlsx。
+ */
 export function getX2tExportFormats(
   fileType: string,
   sourceFileType?: string,
@@ -403,7 +414,9 @@ export function getX2tExportFormats(
   };
 }
 
-/** x2t wasm 无法稳定输出旧二进制 .doc；导出时降级为 docx。 */
+/**
+ * @description x2t wasm 无法稳定输出旧二进制 .doc；导出时降级为 docx。
+ */
 export function normalizeX2tExportFileType(fileType: string) {
   const ext = getFileExt(fileType);
   return ext === "doc" ? "docx" : ext;
@@ -467,12 +480,16 @@ const canvasBinOutputFormats = new Set<number>([
   AvsFileType.AVS_FILE_TEAMLAB_PPTY,
 ]);
 
-/** EditorManager export() / downloadAs("bin") 使用的 canvas bin 格式，不是 UI 另存为。 */
+/**
+ * @description EditorManager export() / downloadAs("bin") 使用的 canvas bin 格式，不是 UI 另存为。
+ */
 export function isCanvasBinOutputFormat(outputFormat?: number) {
   return outputFormat != null && canvasBinOutputFormats.has(outputFormat);
 }
 
-/** OnlyOffice downloadAs cmd.outputformat（AvsFileType 数值）→ 文件扩展名。 */
+/**
+ * @description OnlyOffice downloadAs cmd.outputformat（AvsFileType 数值）→ 文件扩展名。
+ */
 export function extensionFromOutputFormat(outputFormat?: number): string {
   if (outputFormat == null) {
     return "";
@@ -480,7 +497,9 @@ export function extensionFromOutputFormat(outputFormat?: number): string {
   return outputFormatToExt[outputFormat] || "";
 }
 
-/** 保证文档标题带正确后缀，供 OnlyOffice 内置「另存为」推导下载文件名。 */
+/**
+ * @description 保证文档标题带正确后缀，供 OnlyOffice 内置「另存为」推导下载文件名。
+ */
 export function ensureTitleWithExtension(title: string, fileType: string): string {
   const ext = fileType.toLowerCase();
   if (!ext) {

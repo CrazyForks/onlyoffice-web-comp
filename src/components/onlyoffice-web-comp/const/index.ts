@@ -119,8 +119,7 @@ export type OnlyOfficeStaticResourceOptions = {
   cdnOrigin?: string | null;
 };
 
-/** @deprecated 使用 X2T_PDF_FONT_MANIFEST[0].file */
-export const X2T_PDF_DEFAULT_FONT_FILE = "Carlito-Regular.ttf";
+const X2T_PDF_DEFAULT_FONT_FILE = "Carlito-Regular.ttf";
 
 /**
  * x2t PDF 字体：每款 TTF 独立二进制 + 别名。
@@ -271,38 +270,6 @@ export const STATIC_RESOURCE = {
     return getStaticResource().x2t;
   },
 } as StaticResource;
-
-/** @deprecated 使用 STATIC_RESOURCE.onlyoffice */
-export const ONLYOFFICE_RESOURCE = {
-  get APP_ROOT() {
-    return getStaticResource().onlyoffice.root;
-  },
-  get API_JS() {
-    return getStaticResource().onlyoffice.apiJs;
-  },
-  get PRELOAD_HTML() {
-    return getStaticResource().onlyoffice.preloadHtml;
-  },
-  get API_URL() {
-    return getStaticResource().onlyoffice.apiUrl;
-  },
-  get PRELOAD_URL() {
-    return getStaticResource().onlyoffice.preloadUrl;
-  },
-} as const;
-
-/** @deprecated 使用 STATIC_RESOURCE.x2t */
-export const X2T_RESOURCE = {
-  get ROOT() {
-    return getStaticResource().x2t.root;
-  },
-  get SCRIPT() {
-    return getStaticResource().x2t.script;
-  },
-  get WASM() {
-    return getStaticResource().x2t.wasm;
-  },
-} as const;
 
 /** 站点相对路径 → 绝对 URL（Worker 内 origin 用 self.location.origin） */
 export function resolveSiteUrl(origin: string, path: string): string {

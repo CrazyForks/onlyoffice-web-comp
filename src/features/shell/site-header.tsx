@@ -133,7 +133,7 @@ function MobileMenuLayer({
               GitHub
             </SiteLinkButton>
             <SiteLinkButton
-              href="/docs/demos"
+              href="/docs/demos/single"
               className="h-10 w-full justify-center px-3"
               onClick={onClose}
             >
@@ -192,7 +192,7 @@ export function SiteHeader() {
             >
               GitHub
             </SiteLinkButton>
-            <SiteLinkButton href="/docs/demos" className="h-8 px-3.5">
+            <SiteLinkButton href="/docs/demos/single" className="h-8 px-3.5">
               开始使用
             </SiteLinkButton>
           </div>

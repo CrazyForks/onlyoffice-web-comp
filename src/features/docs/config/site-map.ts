@@ -25,7 +25,7 @@ export type DocsNavGroup = {
   items: DocsNavItem[];
 };
 
-/** 示例 Tab：Markdown 源文件 + 站点 query 路由 */
+/** 示例路由：Markdown 源文件 + 独立示例页 */
 export const DEMO_TABS: {
   id: DemoTabId;
   file: string;
@@ -34,15 +34,15 @@ export const DEMO_TABS: {
 }[] = [
   {
     id: "single",
-    file: "08-单实例示例.md",
+    file: "单实例示例.md",
     label: "单实例",
-    href: "/docs/demos?tab=single",
+    href: "/docs/demos/single",
   },
   {
     id: "multi",
-    file: "09-多实例示例.md",
+    file: "多实例示例.md",
     label: "多实例",
-    href: "/docs/demos?tab=multi",
+    href: "/docs/demos/multi",
   },
 ];
 
@@ -57,7 +57,7 @@ export const DOC_ENTRIES: MarkdownDoc[] = [
   {
     kind: "markdown",
     slug: "",
-    file: "00-概述.md",
+    file: "概述.md",
     label: "概述",
     href: "/docs",
     section: "intro",
@@ -65,7 +65,7 @@ export const DOC_ENTRIES: MarkdownDoc[] = [
   {
     kind: "markdown",
     slug: "getting-started",
-    file: "01-快速开始.md",
+    file: "快速开始.md",
     label: "快速开始",
     href: "/docs/getting-started",
     section: "intro",
@@ -73,7 +73,7 @@ export const DOC_ENTRIES: MarkdownDoc[] = [
   {
     kind: "markdown",
     slug: "api",
-    file: "02-核心API.md",
+    file: "核心API.md",
     label: "核心 API",
     href: "/docs/api",
     section: "guide",
@@ -81,7 +81,7 @@ export const DOC_ENTRIES: MarkdownDoc[] = [
   {
     kind: "markdown",
     slug: "events",
-    file: "03-事件系统.md",
+    file: "事件系统.md",
     label: "事件系统",
     href: "/docs/events",
     section: "guide",
@@ -89,7 +89,7 @@ export const DOC_ENTRIES: MarkdownDoc[] = [
   {
     kind: "markdown",
     slug: "example",
-    file: "04-完整示例.md",
+    file: "完整示例.md",
     label: "完整示例",
     href: "/docs/example",
     section: "guide",
@@ -97,7 +97,7 @@ export const DOC_ENTRIES: MarkdownDoc[] = [
   {
     kind: "markdown",
     slug: "reference",
-    file: "05-API参考.md",
+    file: "API参考.md",
     label: "API 参考",
     href: "/docs/reference",
     section: "reference",
@@ -105,7 +105,7 @@ export const DOC_ENTRIES: MarkdownDoc[] = [
   {
     kind: "markdown",
     slug: "formats",
-    file: "06-注意事项与支持格式.md",
+    file: "注意事项与支持格式.md",
     label: "注意事项与格式",
     href: "/docs/formats",
     section: "reference",
@@ -113,7 +113,7 @@ export const DOC_ENTRIES: MarkdownDoc[] = [
   {
     kind: "markdown",
     slug: "fonts",
-    file: "10-字体配置.md",
+    file: "字体配置.md",
     label: "字体配置",
     href: "/docs/fonts",
     section: "reference",
@@ -121,7 +121,7 @@ export const DOC_ENTRIES: MarkdownDoc[] = [
   {
     kind: "markdown",
     slug: "word-api",
-    file: "07-批注修订与-Word-API.md",
+    file: "批注修订与-Word-API.md",
     label: "批注与 Word API",
     href: "/docs/word-api",
     section: "reference",
@@ -174,7 +174,7 @@ export function resolveMarkdownHref(
 ): string | undefined {
   if (!href) return href;
 
-  const mdMatch = href.match(/(?:\.\/)?(\d{2}-[^/]+\.md)$/);
+  const mdMatch = href.match(/(?:\.\/)?([^/]+\.md)$/);
   if (mdMatch) {
     const mapped = FILE_TO_HREF[mdMatch[1]];
     if (mapped) return mapped;
@@ -190,13 +190,9 @@ export function resolveMarkdownHref(
 export function isDocsNavActive(
   pathname: string,
   href: string,
-  searchParams?: URLSearchParams,
 ): boolean {
   if (href.startsWith("/docs/demos")) {
-    if (pathname !== "/docs/demos") return false;
-    const tab = searchParams?.get("tab") ?? "single";
-    const hrefTab = new URL(href, "http://localhost").searchParams.get("tab");
-    return tab === (hrefTab ?? "single");
+    return pathname === href;
   }
 
   if (href === "/docs") return pathname === "/docs";

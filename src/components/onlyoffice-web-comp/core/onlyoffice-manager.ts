@@ -18,9 +18,9 @@ import {
 } from "../const";
 import type { OfficeTheme } from "../internal/editor/types";
 import {
-  clearDocmentObj,
-  getDocmentObj,
-  setDocmentObj,
+  clearDocumentObj,
+  getDocumentObj,
+  setDocumentObj,
 } from "../store/document";
 import {
   getCurrentLang,
@@ -168,7 +168,7 @@ export class OnlyOfficeManager {
   async openDocument(input: OpenDocumentInput) {
     const readOnly = input.readOnly ?? this.readOnly;
 
-    setDocmentObj(
+    setDocumentObj(
       {
         fileName: input.fileName,
         file: input.file,
@@ -177,7 +177,7 @@ export class OnlyOfficeManager {
       this.containerId,
     );
 
-    const { fileName, file } = getDocmentObj(this.containerId);
+    const { fileName, file } = getDocumentObj(this.containerId);
 
     await this.editor.create({
       file,
@@ -276,6 +276,14 @@ export class OnlyOfficeManager {
     return this.editor;
   }
 
+  getLogger() {
+    return this.editor.getLogger();
+  }
+
+  printLogs() {
+    this.editor.printLogs();
+  }
+
   async exportDocument() {
     return this.editor.export();
   }
@@ -283,7 +291,7 @@ export class OnlyOfficeManager {
   /** 导出为 Office 文件 Blob：Editor.bin → x2t → doc.{fileType}。 */
   async exportAsBlob(): Promise<OnlyOfficeExportBlobResult> {
     if (this.editor.isOfficeXmlSizeLimitExceeded()) {
-      const { file, fileName } = getDocmentObj(this.containerId);
+      const { file, fileName } = getDocumentObj(this.containerId);
       if (file) {
         return {
           blob: file,
@@ -302,6 +310,7 @@ export class OnlyOfficeManager {
       exportFileType,
       binData.media,
       binData.themes,
+      this.editor.getLogger(),
     );
 
     return {
@@ -342,7 +351,7 @@ export class OnlyOfficeManager {
 
   destroy() {
     this.editor.destroy();
-    clearDocmentObj(this.containerId);
+    clearDocumentObj(this.containerId);
     this.ready = false;
   }
 }

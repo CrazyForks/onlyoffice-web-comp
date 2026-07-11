@@ -45,14 +45,14 @@ function getScopeId(scopeId?: string) {
   return scopeId || DEFAULT_DOCUMENT_SCOPE;
 }
 
-export function setDocmentObj(
+export function setDocumentObj(
   state: SetOnlyOfficeDocumentStateInput,
   scopeId?: string,
 ) {
   documentStates.set(getScopeId(scopeId), normalizeDocumentState(state));
 }
 
-export function getDocmentObj(scopeId?: string) {
+export function getDocumentObj(scopeId?: string) {
   const key = getScopeId(scopeId);
   let state = documentStates.get(key);
   if (!state) {
@@ -61,7 +61,7 @@ export function getDocmentObj(scopeId?: string) {
   }
   return state;
 }
-export function clearDocmentObj(scopeId?: string) {
+export function clearDocumentObj(scopeId?: string) {
   if (scopeId) {
     documentStates.delete(scopeId);
     return;
@@ -71,7 +71,7 @@ export function clearDocmentObj(scopeId?: string) {
 }
 
 export function setNewDocument(fileType = "docx", scopeId?: string) {
-  setDocmentObj(
+  setDocumentObj(
     {
       isNew: true,
       fileName: `New Document.${fileType}`,
@@ -86,7 +86,7 @@ export function setDocumentFile(
   fileName = file.name,
   scopeId?: string,
 ) {
-  setDocmentObj(
+  setDocumentObj(
     {
       isNew: false,
       file,
@@ -112,7 +112,7 @@ export function setDocumentUrl(
 ) {
   const name = fileName || decodeURIComponent(url.split("/").pop() || "Document");
 
-  setDocmentObj(
+  setDocumentObj(
     {
       isNew: false,
       url,
@@ -124,11 +124,11 @@ export function setDocumentUrl(
   );
 }
 
-export function clearAllDocmentObjs() {
+export function clearAllDocumentObjs() {
   documentStates.clear();
   documentStates.set(DEFAULT_DOCUMENT_SCOPE, createDefaultDocumentState());
 }
 
-export function getAllDocmentObjs() {
+export function getAllDocumentObjs() {
   return new Map(documentStates);
 }
