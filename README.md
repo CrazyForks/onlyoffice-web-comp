@@ -13,6 +13,22 @@ This repository has two parts:
 | **Component library** | [`src/components/onlyoffice-web-comp/`](src/components/onlyoffice-web-comp/) | Reusable Web editor wrapper + Markdown docs |
 | **Demo site** | [`src/app/`](src/app/) + [`src/features/`](src/features/) | Next.js landing, docs, and live demos |
 
+## Project Positioning
+
+This project is not an npm package with a one-line install flow yet. It is a browser-only OnlyOffice integration template: the reusable runtime lives in `src/components/onlyoffice-web-comp/`, and this repository also includes the static OnlyOffice SDK / x2t assets required by that runtime.
+
+Use this project when you want to embed OnlyOffice editing into your own web app without running OnlyOffice Document Server. The demo site is intentionally part of the repository so you can copy a working integration instead of reconstructing the editor lifecycle from scattered snippets.
+
+## Integrating into Your Project
+
+The practical integration path is:
+
+1. Copy [`src/components/onlyoffice-web-comp/`](src/components/onlyoffice-web-comp/) into your application source tree.
+2. Copy the static assets from [`public/packages/onlyoffice/`](public/packages/onlyoffice/) into your app's `public/packages/onlyoffice/` directory.
+3. Build your UI by following [`src/features/demo/office-preview-page.tsx`](src/features/demo/office-preview-page.tsx): create an editor container, keep an `OnlyOfficeManager` instance, call `openDocument`, `downloadExport`, `toggleReadOnly`, and destroy the manager on unmount.
+
+Static resource resolution is centralized in [`src/components/onlyoffice-web-comp/const/index.ts`](src/components/onlyoffice-web-comp/const/index.ts). By default it reads `/packages/onlyoffice/9.3.0`; to switch to a CDN, update the `cdnOrigin` used by `buildStaticResource`.
+
 ## Core Advantages
 
 - **Local processing**: Documents stay in the browser
@@ -43,7 +59,7 @@ pnpm dev
 
 3. Upload a file → edit → export
 
-Legacy routes `/examples` and `/multi` redirect to the multi-instance demo.
+Legacy route `/examples` redirects to the single-instance demo; `/multi` redirects to the multi-instance demo.
 
 ## Component Library Docs
 
@@ -80,7 +96,7 @@ onlyoffice-web-comp/
 │   │   │   ├── page.tsx                  # /docs (overview md)
 │   │   │   ├── [slug]/page.tsx           # /docs/*
 │   │   │   └── demos/                    # /docs/demos/single|multi
-│   │   └── examples/                     # → redirect to multi demo
+│   │   └── examples/                     # → redirect to single demo
 │   ├── features/
 │   │   ├── docs/                         # Docs shell, markdown renderer, site-map
 │   │   ├── demo/                         # Live demo components
@@ -139,7 +155,7 @@ OnlyOfficeManager.registerStaticResource({
 });
 ```
 
-`cdnOrigin` points to the uploaded `public/packages` root, so do not append `/packages`. Cloudflare Pages Direct Upload supports Wrangler folder uploads; dashboard drag-and-drop is less suitable for this repository because the SDK contains many files.
+`cdnOrigin` points to the uploaded `public/packages` root, so do not append `/packages`. Configure this resource origin in [`src/components/onlyoffice-web-comp/const/index.ts`](src/components/onlyoffice-web-comp/const/index.ts) by editing the `cdnOrigin` logic in `buildStaticResource`. Cloudflare Pages Direct Upload supports Wrangler folder uploads; dashboard drag-and-drop is less suitable for this repository because the SDK contains many files.
 
 ## Fonts
 

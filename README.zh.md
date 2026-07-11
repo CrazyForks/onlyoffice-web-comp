@@ -13,6 +13,22 @@
 | **组件库** | [`src/components/onlyoffice-web-comp/`](src/components/onlyoffice-web-comp/) | 可复用的 Web 端编辑器封装 + Markdown 文档源 |
 | **演示站点** | [`src/app/`](src/app/) + [`src/features/`](src/features/) | Next.js 主页、文档站、在线示例 |
 
+## 项目定位
+
+这个项目目前不是一个 `npm install` 后直接引入的包，而是一个浏览器端 OnlyOffice 集成模板：可复用的运行时代码在 `src/components/onlyoffice-web-comp/`，仓库同时包含这套运行时需要的 OnlyOffice SDK / x2t 静态资源。
+
+如果你希望在自己的 Web 项目里接入 OnlyOffice，并且不想部署 OnlyOffice Document Server，可以把这里当作一套可复制的工程实现。演示站点也是项目的一部分，目的是让你直接参考一个已经跑通的编辑器生命周期，而不是只看零散 API 片段。
+
+## 怎么集成进你的项目
+
+实际接入可以按这个路径做：
+
+1. 复制 [`src/components/onlyoffice-web-comp/`](src/components/onlyoffice-web-comp/) 到你的项目源码目录。
+2. 复制 [`public/packages/onlyoffice/`](public/packages/onlyoffice/) 静态资源到你的项目 `public/packages/onlyoffice/` 目录。
+3. 参考 [`src/features/demo/office-preview-page.tsx`](src/features/demo/office-preview-page.tsx) 构造自己的界面：准备编辑器容器，维护一个 `OnlyOfficeManager` 实例，按需调用 `openDocument`、`downloadExport`、`toggleReadOnly`，并在页面卸载时销毁 manager。
+
+静态资源读取统一在 [`src/components/onlyoffice-web-comp/const/index.ts`](src/components/onlyoffice-web-comp/const/index.ts) 配置。默认读取 `/packages/onlyoffice/9.3.0`；如果你要切换到 CDN，修改 `buildStaticResource` 中使用的 `cdnOrigin` 即可。
+
 ## 核心优势
 
 - **数据留在本地**：文档处理在浏览器内完成
@@ -43,7 +59,7 @@ pnpm dev
 
 3. 上传本地文件 → 编辑 → 导出
 
-旧路由 `/examples`、`/multi` 会重定向到多实例示例。
+旧路由 `/examples` 会重定向到单实例示例；`/multi` 会重定向到多实例示例。
 
 ## 组件库文档
 
@@ -80,7 +96,7 @@ onlyoffice-web-comp/
 │   │   │   ├── page.tsx                  # /docs（概述 md）
 │   │   │   ├── [slug]/page.tsx           # /docs/*
 │   │   │   └── demos/                    # /docs/demos/single|multi
-│   │   └── examples/                     # → 重定向至多实例示例
+│   │   └── examples/                     # → 重定向至单实例示例
 │   ├── features/
 │   │   ├── docs/                         # 文档壳、Markdown 渲染、site-map
 │   │   ├── demo/                         # 在线演示组件
@@ -139,7 +155,7 @@ OnlyOfficeManager.registerStaticResource({
 });
 ```
 
-`cdnOrigin` 对应上传后的 `public/packages` 根目录，不需要再追加 `/packages`。Cloudflare Pages Direct Upload 支持用 Wrangler 上传目录；由于 SDK 文件数量较多，Dashboard 拖拽上传不太适合本仓库。
+`cdnOrigin` 对应上传后的 `public/packages` 根目录，不需要再追加 `/packages`。在 [`src/components/onlyoffice-web-comp/const/index.ts`](src/components/onlyoffice-web-comp/const/index.ts) 中修改 `buildStaticResource` 的 `cdnOrigin` 逻辑即可固定资源来源。Cloudflare Pages Direct Upload 支持用 Wrangler 上传目录；由于 SDK 文件数量较多，Dashboard 拖拽上传不太适合本仓库。
 
 ## 字体配置
 
