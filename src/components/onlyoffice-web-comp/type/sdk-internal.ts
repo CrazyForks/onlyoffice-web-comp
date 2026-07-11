@@ -8,7 +8,7 @@
  * - 主编辑器 iframe：web-apps/apps/{documenteditor|spreadsheeteditor|presentationeditor}/main/index.html
  * - PPT 演示者视图 popup：web-apps/apps/presentationeditor/main/index.reporter.html
  * - 协作 Mock 注入：core/editor-manager.ts → installIframeProxies() /
- *   internal/editor/install-proxies.ts
+ *   internal/editor/runtime-bridge.ts
  */
 
 /** Word 逻辑文档运行时（SDK 混淆名，如 ra.Ea）；仅声明接入层用到的字段。 */
@@ -39,7 +39,7 @@ export type OnlyOfficeIframeWindow = typeof window & {
 
   /**
    * XHR / fetch / socket.io 已代理到内存 EditorServer。
-   * 写入：install-proxies.ts → installOnlyOfficeProxies()
+   * 写入：runtime-bridge.ts → installOnlyOfficeProxies()
    * 读取：EditorManager.installIframeProxies() 防重复安装。
    */
   __ONLYOFFICE_PROXIES_INSTALLED__?: boolean;
@@ -53,7 +53,7 @@ export type OnlyOfficeIframeWindow = typeof window & {
 
   /**
    * 演示者视图（Reporter）跨窗口注入入口。
-   * 写入：install-proxies.ts → installReporterWindowHook()（挂在 iframe window 上）
+   * 写入：runtime-bridge.ts → installReporterWindowHook()（挂在 iframe window 上）
    * 读取：index.reporter.html 启动脚本通过 window.opener 链调用 install(target)，
    *       在 RequireJS 加载 SDK 前完成 Mock 注入。
    */
@@ -63,7 +63,7 @@ export type OnlyOfficeIframeWindow = typeof window & {
 
   /**
    * iframe 的 window.open 已劫持，用于在打开 index.reporter.html 时尽早注入 Mock。
-   * 写入：install-proxies.ts → installReporterWindowHook()
+   * 写入：runtime-bridge.ts → installReporterWindowHook()
    */
   __ONLYOFFICE_REPORTER_HOOK__?: boolean;
 };

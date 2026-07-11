@@ -6,7 +6,7 @@ import {
   type OnlyOfficeProxyWindow,
   type ReporterHookWindow,
   type ScopedIoFactory,
-} from "../internal/editor/install-proxies";
+} from "../internal/editor/runtime-bridge";
 import {
   callCrossOriginEditor,
   canAccessIframeWindow,
@@ -14,20 +14,20 @@ import {
   subscribeCrossOriginEditorEvent,
   unregisterCrossOriginBridge,
   watchCrossOriginIframe,
-} from "../internal/editor/cross-origin-bridge";
+} from "../internal/editor/runtime-bridge";
 import {
   CROSS_ORIGIN_EDITOR_COMMAND,
   CROSS_ORIGIN_EDITOR_EVENT,
-} from "../internal/editor/cross-origin-protocol";
+} from "../internal/editor/runtime-bridge";
 import { EditorServer } from "../internal/editor/server";
-import io, { type MockSocketOptions } from "../internal/editor/socket";
+import io, { type MockSocketOptions } from "../internal/editor/runtime-bridge";
+import { EditorLogger } from "../internal/editor/logger";
 import {
   type DocEditor,
   DocumentType,
   isOfficeXmlSizeLimitExceededError,
   type OfficeXmlSizeLimitExceededPayload,
   type OfficeTheme,
-  type PluginMode,
   type User,
 } from "../internal/editor/types";
 import { getDocumentType, isOnlyOfficeCdnMode } from "../const";
@@ -83,7 +83,6 @@ export type CreateEditorViewOptions = {
   editorManager?: EditorManager;
   editing?: boolean;
   theme?: OfficeTheme;
-  plugins?: PluginMode;
   /** 由 EditorManagerFactory.beginLoadSession 生成，用于丢弃过期的异步初始化 */
   loadSession?: number;
   /** 修订审阅页：开启 markup 显示与页边修订气泡 */
@@ -174,7 +173,7 @@ export class EditorManager {
   private uiTheme: OfficeTheme = "theme-white";
   private instanceId = getNewInstanceId();
   private containerId: string;
-  private plugins: PluginMode = "featured";
+  private logger: EditorLogger;
   private fileName = "New Document.docx";
   private fileType = "docx";
   private media: Record<string, Uint8Array> = {};
@@ -196,8 +195,10 @@ export class EditorManager {
 
   constructor(containerId = ONLYOFFICE_ID) {
     this.containerId = containerId;
+    this.logger = new EditorLogger(containerId);
     this.server = new EditorServer({
-      getState: () => ({ plugins: "none", readOnly: this.readOnly }),
+      getState: () => ({ readOnly: this.readOnly }),
+      logger: this.logger,
       onUserSave: (snapshot) => {
         this.dirty = false;
         this.notifyUserSave(snapshot);
@@ -274,7 +275,7 @@ export class EditorManager {
 
   private createScopedIo() {
     return (url?: string, options: MockSocketOptions = {}) => {
-      const socket = io(url, options);
+      const socket = io(url, { ...options, logger: this.logger });
 
       socket.on("connect", () => {
         this.server.handleConnect({ socket });
@@ -289,7 +290,10 @@ export class EditorManager {
 
   private createCrossOriginServerIo(): ScopedIoFactory {
     return () => {
-      const socket = io(undefined, { deferConnect: true });
+      const socket = io(undefined, {
+        deferConnect: true,
+        logger: this.logger,
+      });
       socket.connected = true;
       socket.disconnected = false;
       return socket;
@@ -1104,7 +1108,6 @@ export class EditorManager {
           viewport: true,
           documentHolder: { clear: true, disable: true },
           toolbar: true,
-          plugins: true,
           protect: true,
           header: { search: false, startfill: false },
           shortcuts: false,
@@ -1129,7 +1132,6 @@ export class EditorManager {
           viewport: false,
           documentHolder: { clear: false, disable: true },
           toolbar: true,
-          plugins: true,
           protect: true,
         });
       }
@@ -1536,7 +1538,6 @@ export class EditorManager {
     }
 
     this.destroy();
-    this.plugins = options.plugins || "featured";
     this.readOnly = !!options.readOnly;
     this.revisionReviewMode = !!options.revisionReview;
     this.server.setOfficeXmlEventConfig(options.officeXmlEvent);
@@ -1728,6 +1729,14 @@ export class EditorManager {
 
   getContainerId() {
     return this.containerId;
+  }
+
+  getLogger() {
+    return this.logger;
+  }
+
+  printLogs() {
+    this.logger.print();
   }
 
   getFileName() {

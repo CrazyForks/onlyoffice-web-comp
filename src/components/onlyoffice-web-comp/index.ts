@@ -16,8 +16,14 @@ export * from "./store";
 export * from "./util";
 export * from "./core";
 export * from "./feature";
+export { EditorLogger } from "./internal/editor/logger";
+export type {
+  EditorLogCategory,
+  EditorLogEntry,
+  EditorLogLevel,
+} from "./internal/editor/logger";
 
 export type * from "./type/word-api";
 export type * from "./type/sdk-internal";
-export type { OfficeTheme, PluginMode, User } from "./internal/editor/types";
+export type { OfficeTheme, User } from "./internal/editor/types";
 export type { OfficeThemeId } from "./const";

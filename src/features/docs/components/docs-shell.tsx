@@ -2,15 +2,14 @@
 
 /**
  * 文档站布局：左侧目录 + 右侧 Markdown 内容区。
- * 目录数据来自 {@link ../config/site-map.ts}；示例项通过 `?tab=` 区分激活态。
+ * 目录数据来自 {@link ../config/site-map.ts}；示例项使用独立路由区分激活态。
  */
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { getDocsNav, isDocsNavActive } from "../config/site-map";
 
 export function DocsShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() ?? "/docs";
-  const searchParams = useSearchParams();
   const navGroups = getDocsNav();
 
   return (
@@ -29,11 +28,7 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
                   </p>
                   <ul className="space-y-0.5 border-l border-neutral-200">
                     {group.items.map((item) => {
-                      const active = isDocsNavActive(
-                        pathname,
-                        item.href,
-                        searchParams,
-                      );
+                      const active = isDocsNavActive(pathname, item.href);
                       return (
                         <li key={item.href}>
                           <Link

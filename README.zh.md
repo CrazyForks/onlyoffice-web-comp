@@ -38,32 +38,32 @@ pnpm dev
 |------|------|
 | `/` | 产品主页 |
 | `/docs` | 组件库文档（直接渲染 Markdown） |
-| `/docs/demos?tab=single` | 单实例在线示例 |
-| `/docs/demos?tab=multi` | 多实例 Tab 在线示例 |
+| `/docs/demos/single` | 单实例在线示例 |
+| `/docs/demos/multi` | 多实例 Tab 在线示例 |
 
 3. 上传本地文件 → 编辑 → 导出
 
-旧路由 `/examples`、`/multi` 会重定向到多实例示例 Tab。
+旧路由 `/examples`、`/multi` 会重定向到多实例示例。
 
 ## 组件库文档
 
 **API 与接入说明不在本 README 重复**，请阅读组件库文档：
 
 - **入口**：[组件库 README（中文）](src/components/onlyoffice-web-comp/readme.zh.md)
-- **概述**：[docs/00-概述.md](src/components/onlyoffice-web-comp/docs/00-概述.md)
+- **概述**：[docs/概述.md](src/components/onlyoffice-web-comp/docs/概述.md)
 
 | 文档 | 内容 |
 |------|------|
-| [01-快速开始](src/components/onlyoffice-web-comp/docs/01-快速开始.md) | 初始化与容器挂载 |
-| [02-核心API](src/components/onlyoffice-web-comp/docs/02-核心API.md) | `OnlyOfficeManager`、多实例 |
-| [03-事件系统](src/components/onlyoffice-web-comp/docs/03-事件系统.md) | EventBus |
-| [04-完整示例](src/components/onlyoffice-web-comp/docs/04-完整示例.md) | React 集成模式 |
-| [05-API参考](src/components/onlyoffice-web-comp/docs/05-API参考.md) | 常量与类型 |
-| [06-注意事项与格式](src/components/onlyoffice-web-comp/docs/06-注意事项与支持格式.md) | 前置条件与格式 |
-| [10-字体配置](src/components/onlyoffice-web-comp/docs/10-字体配置.md) | 自定义字体注册 |
-| [07-批注修订](src/components/onlyoffice-web-comp/docs/07-批注修订与-Word-API.md) | 批注、修订 |
-| [08-单实例示例](src/components/onlyoffice-web-comp/docs/08-单实例示例.md) | 单实例 Demo 与源码说明 |
-| [09-多实例示例](src/components/onlyoffice-web-comp/docs/09-多实例示例.md) | Tab 多实例完整源码 |
+| [快速开始](src/components/onlyoffice-web-comp/docs/快速开始.md) | 初始化与容器挂载 |
+| [核心API](src/components/onlyoffice-web-comp/docs/核心API.md) | `OnlyOfficeManager`、多实例 |
+| [事件系统](src/components/onlyoffice-web-comp/docs/事件系统.md) | EventBus |
+| [完整示例](src/components/onlyoffice-web-comp/docs/完整示例.md) | React 集成模式 |
+| [API参考](src/components/onlyoffice-web-comp/docs/API参考.md) | 常量与类型 |
+| [注意事项与格式](src/components/onlyoffice-web-comp/docs/注意事项与支持格式.md) | 前置条件与格式 |
+| [字体配置](src/components/onlyoffice-web-comp/docs/字体配置.md) | 自定义字体注册 |
+| [批注修订](src/components/onlyoffice-web-comp/docs/批注修订与-Word-API.md) | 批注、修订 |
+| [单实例示例](src/components/onlyoffice-web-comp/docs/单实例示例.md) | 单实例 Demo 与源码说明 |
+| [多实例示例](src/components/onlyoffice-web-comp/docs/多实例示例.md) | Tab 多实例完整源码 |
 
 ```typescript
 import { OnlyOfficeManager, FILE_TYPE, ONLYOFFICE_ID } from "@/components/onlyoffice-web-comp";
@@ -79,7 +79,7 @@ onlyoffice-web-comp/
 │   │   ├── docs/                         # 文档站
 │   │   │   ├── page.tsx                  # /docs（概述 md）
 │   │   │   ├── [slug]/page.tsx           # /docs/*
-│   │   │   └── demos/page.tsx            # /docs/demos?tab=single|multi
+│   │   │   └── demos/                    # /docs/demos/single|multi
 │   │   └── examples/                     # → 重定向至多实例示例
 │   ├── features/
 │   │   ├── docs/                         # 文档壳、Markdown 渲染、site-map
@@ -143,7 +143,7 @@ OnlyOfficeManager.registerStaticResource({
 
 ## 字体配置
 
-自定义字体通过 **`__custom_font_registry__`** 注册，配合 **`ttf-to-catalog-font.mjs`** 生成 OnlyOffice catalog 线格式。完整步骤见组件库文档 **[10 - 字体配置](src/components/onlyoffice-web-comp/docs/10-字体配置.md)**。
+自定义字体通过 **`__custom_font_registry__`** 注册，配合 **`ttf-to-catalog-font.mjs`** 生成 OnlyOffice catalog 线格式。完整步骤见组件库文档 **[字体配置](src/components/onlyoffice-web-comp/docs/字体配置.md)**。
 
 简要流程：
 

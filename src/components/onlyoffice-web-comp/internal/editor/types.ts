@@ -1,3 +1,5 @@
+import type { EditorLogger } from "./logger";
+
 export interface DocEditor {
   attachMouseEvents: () => void;
   blurFocus: (data: unknown) => void;
@@ -66,7 +68,9 @@ export const enum DocumentType {
 export const enum AvsFileType {
   AVS_FILE_UNKNOWN = 0x0000,
 
-  // Document
+  /**
+   * @description 文档格式。
+   */
   AVS_FILE_DOCUMENT = 0x0040,
   AVS_FILE_DOCUMENT_DOCX = AVS_FILE_DOCUMENT + 0x0001,
   AVS_FILE_DOCUMENT_DOC = AVS_FILE_DOCUMENT + 0x0002,
@@ -91,7 +95,9 @@ export const enum AvsFileType {
   AVS_FILE_DOCUMENT_DOCXF = AVS_FILE_DOCUMENT + 0x0016,
   AVS_FILE_DOCUMENT_OFORM_PDF = AVS_FILE_DOCUMENT + 0x0017,
 
-  // Presentation
+  /**
+   * @description 演示文稿格式。
+   */
   AVS_FILE_PRESENTATION = 0x0080,
   AVS_FILE_PRESENTATION_PPTX = AVS_FILE_PRESENTATION + 0x0001,
   AVS_FILE_PRESENTATION_PPT = AVS_FILE_PRESENTATION + 0x0002,
@@ -106,7 +112,9 @@ export const enum AvsFileType {
   AVS_FILE_PRESENTATION_PPTX_PACKAGE = AVS_FILE_PRESENTATION + 0x000b,
   AVS_FILE_PRESENTATION_ODG = AVS_FILE_PRESENTATION + 0x000c,
 
-  // Spreadsheet
+  /**
+   * @description 电子表格格式。
+   */
   AVS_FILE_SPREADSHEET = 0x0100,
   AVS_FILE_SPREADSHEET_XLSX = AVS_FILE_SPREADSHEET + 0x0001,
   AVS_FILE_SPREADSHEET_XLS = AVS_FILE_SPREADSHEET + 0x0002,
@@ -121,7 +129,9 @@ export const enum AvsFileType {
   AVS_FILE_SPREADSHEET_XLSX_FLAT = AVS_FILE_SPREADSHEET + 0x000b,
   AVS_FILE_SPREADSHEET_XLSX_PACKAGE = AVS_FILE_SPREADSHEET + 0x000c,
 
-  // Crossplatform
+  /**
+   * @description 跨平台输出格式。
+   */
   AVS_FILE_CROSSPLATFORM = 0x0200,
   AVS_FILE_CROSSPLATFORM_PDF = AVS_FILE_CROSSPLATFORM + 0x0001,
   AVS_FILE_CROSSPLATFORM_SWF = AVS_FILE_CROSSPLATFORM + 0x0002,
@@ -133,7 +143,9 @@ export const enum AvsFileType {
   AVS_FILE_CROSSPLATFORM_HTMLR_CANVAS = AVS_FILE_CROSSPLATFORM + 0x0008,
   AVS_FILE_CROSSPLATFORM_PDFA = AVS_FILE_CROSSPLATFORM + 0x0009,
 
-  // Image
+  /**
+   * @description 图片格式。
+   */
   AVS_FILE_IMAGE = 0x0400,
   AVS_FILE_IMAGE_JPG = AVS_FILE_IMAGE + 0x0001,
   AVS_FILE_IMAGE_TIFF = AVS_FILE_IMAGE + 0x0002,
@@ -149,7 +161,9 @@ export const enum AvsFileType {
   AVS_FILE_IMAGE_PSD = AVS_FILE_IMAGE + 0x000c,
   AVS_FILE_IMAGE_ICO = AVS_FILE_IMAGE + 0x000d,
 
-  // Other
+  /**
+   * @description 其他格式。
+   */
   AVS_FILE_OTHER = 0x0800,
   AVS_FILE_OTHER_EXTRACT_IMAGE = AVS_FILE_OTHER + 0x0001,
   AVS_FILE_OTHER_MS_OFFCRYPTO = AVS_FILE_OTHER + 0x0002,
@@ -158,26 +172,35 @@ export const enum AvsFileType {
   AVS_FILE_OTHER_OLD_PRESENTATION = AVS_FILE_OTHER + 0x0005,
   AVS_FILE_OTHER_OLD_DRAWING = AVS_FILE_OTHER + 0x0006,
   AVS_FILE_OTHER_OOXML = AVS_FILE_OTHER + 0x0007,
-  AVS_FILE_OTHER_JSON = AVS_FILE_OTHER + 0x0008, // 对于 mail-merge
+  /**
+   * @description mail-merge 使用的 JSON 数据格式。
+   */
+  AVS_FILE_OTHER_JSON = AVS_FILE_OTHER + 0x0008,
   AVS_FILE_OTHER_ODF = AVS_FILE_OTHER + 0x000a,
   AVS_FILE_OTHER_MS_MITCRYPTO = AVS_FILE_OTHER + 0x000b,
   AVS_FILE_OTHER_MS_VBAPROJECT = AVS_FILE_OTHER + 0x000c,
   AVS_FILE_OTHER_PACKAGE_IN_OLE = AVS_FILE_OTHER + 0x000d,
 
-  // Teamlab
+  /**
+   * @description Teamlab 内部格式。
+   */
   AVS_FILE_TEAMLAB = 0x1000,
   AVS_FILE_TEAMLAB_DOCY = AVS_FILE_TEAMLAB + 0x0001,
   AVS_FILE_TEAMLAB_XLSY = AVS_FILE_TEAMLAB + 0x0002,
   AVS_FILE_TEAMLAB_PPTY = AVS_FILE_TEAMLAB + 0x0003,
 
-  // Canvas
+  /**
+   * @description OnlyOffice 画布格式。
+   */
   AVS_FILE_CANVAS = 0x2000,
   AVS_FILE_CANVAS_WORD = AVS_FILE_CANVAS + 0x0001,
   AVS_FILE_CANVAS_SPREADSHEET = AVS_FILE_CANVAS + 0x0002,
   AVS_FILE_CANVAS_PRESENTATION = AVS_FILE_CANVAS + 0x0003,
   AVS_FILE_CANVAS_PDF = AVS_FILE_CANVAS + 0x0004,
 
-  // Draw
+  /**
+   * @description 绘图格式。
+   */
   AVS_FILE_DRAW = 0x4000,
   AVS_FILE_DRAW_VSDX = AVS_FILE_DRAW + 0x0001,
   AVS_FILE_DRAW_VSSX = AVS_FILE_DRAW + 0x0002,
@@ -187,13 +210,19 @@ export const enum AvsFileType {
   AVS_FILE_DRAW_VSTM = AVS_FILE_DRAW + 0x0006,
 }
 
-/** OnlyOffice x2t CSV encoding index (46 = UTF-8 / codepage 65001). */
+/**
+ * @description OnlyOffice x2t CSV 编码索引，46 表示 UTF-8 / codepage 65001。
+ */
 export const X2T_CSV_ENCODING_UTF8 = 46;
 
-/** OnlyOffice x2t CSV encoding index (18 = GB2312 / codepage 936). */
+/**
+ * @description OnlyOffice x2t CSV 编码索引，18 表示 GB2312 / codepage 936。
+ */
 export const X2T_CSV_ENCODING_GBK = 18;
 
-/** OnlyOffice x2t CSV delimiter enum values. */
+/**
+ * @description OnlyOffice x2t CSV 分隔符枚举值。
+ */
 export const X2T_CSV_DELIMITER_TAB = 1;
 export const X2T_CSV_DELIMITER_SEMICOLON = 2;
 export const X2T_CSV_DELIMITER_COMMA = 4;
@@ -208,7 +237,9 @@ export interface X2tConvertParams {
   csvDelimiter?: number;
   csvDelimiterChar?: string;
   media?: { [key: string]: Uint8Array };
-  /** Web SDK PDF 另存为 POST 的渲染器 Memory 流，x2t 需写入 /working/pdf.bin。 */
+  /**
+   * @description Web SDK PDF 另存为 POST 的渲染器 Memory 流，x2t 需写入 /working/pdf.bin。
+   */
   pdfBin?: Uint8Array;
   fonts?: { [key: string]: Uint8Array };
   fontAliases?: { [key: string]: string };
@@ -240,8 +271,6 @@ export type OfficeTheme =
   | "theme-dark"
   | "theme-night"
   | "theme-contrast-dark";
-
-export type PluginMode = "featured" | "all" | "none";
 
 export type EditorDocumentSnapshot = {
   fileName: string;
@@ -284,9 +313,14 @@ export function isOfficeXmlSizeLimitExceededError(
 }
 
 export interface ServerOptions {
-  getState?: () => { plugins: PluginMode; readOnly?: boolean };
-  /** 用户触发保存（非 export/downloadAs 导出）时回调，携带最新文档快照。 */
+  getState?: () => { readOnly?: boolean };
+  logger?: EditorLogger;
+  /**
+   * @description 用户触发保存（非 export/downloadAs 导出）时回调，携带最新文档快照。
+   */
   onUserSave?: (snapshot: EditorDocumentSnapshot) => void;
-  /** 文档异步加载失败时回调；open() 返回后 x2t 转换仍可能在 loadPromise 中失败。 */
+  /**
+   * @description 文档异步加载失败时回调；open() 返回后 x2t 转换仍可能在 loadPromise 中失败。
+   */
   onLoadError?: (error: Error) => void;
 }

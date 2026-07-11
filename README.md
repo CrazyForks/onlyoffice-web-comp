@@ -38,32 +38,32 @@ pnpm dev
 |-------|-------------|
 | `/` | Product landing page |
 | `/docs` | Component library documentation (rendered from Markdown) |
-| `/docs/demos?tab=single` | Single-instance editor demo |
-| `/docs/demos?tab=multi` | Multi-instance Tab demo |
+| `/docs/demos/single` | Single-instance editor demo |
+| `/docs/demos/multi` | Multi-instance Tab demo |
 
 3. Upload a file → edit → export
 
-Legacy routes `/examples` and `/multi` redirect to the multi-instance demo tab.
+Legacy routes `/examples` and `/multi` redirect to the multi-instance demo.
 
 ## Component Library Docs
 
 **API details live in the component library docs**, not duplicated here.
 
 - **Entry**: [Component README (English)](src/components/onlyoffice-web-comp/readme.md)
-- **Overview**: [docs/00-概述.md](src/components/onlyoffice-web-comp/docs/00-概述.md)
+- **Overview**: [docs/概述.md](src/components/onlyoffice-web-comp/docs/概述.md)
 
 | Doc | Topic |
 |-----|-------|
-| [01 Quick Start](src/components/onlyoffice-web-comp/docs/01-快速开始.md) | Init and container mount |
-| [02 Core API](src/components/onlyoffice-web-comp/docs/02-核心API.md) | `OnlyOfficeManager`, multi-instance |
-| [03 Events](src/components/onlyoffice-web-comp/docs/03-事件系统.md) | EventBus |
-| [04 Examples](src/components/onlyoffice-web-comp/docs/04-完整示例.md) | React integration patterns |
-| [05 Reference](src/components/onlyoffice-web-comp/docs/05-API参考.md) | Constants and types |
-| [06 Notes & Formats](src/components/onlyoffice-web-comp/docs/06-注意事项与支持格式.md) | Prerequisites and formats |
-| [10 Fonts](src/components/onlyoffice-web-comp/docs/10-字体配置.md) | Custom font registration |
-| [07 Comments & Revisions](src/components/onlyoffice-web-comp/docs/07-批注修订与-Word-API.md) | Comments and revisions |
-| [08 Single-instance Demo](src/components/onlyoffice-web-comp/docs/08-单实例示例.md) | Single editor demo + source |
-| [09 Multi-instance Demo](src/components/onlyoffice-web-comp/docs/09-多实例示例.md) | Full Tab demo source |
+| [Quick Start](src/components/onlyoffice-web-comp/docs/快速开始.md) | Init and container mount |
+| [Core API](src/components/onlyoffice-web-comp/docs/核心API.md) | `OnlyOfficeManager`, multi-instance |
+| [Events](src/components/onlyoffice-web-comp/docs/事件系统.md) | EventBus |
+| [Examples](src/components/onlyoffice-web-comp/docs/完整示例.md) | React integration patterns |
+| [Reference](src/components/onlyoffice-web-comp/docs/API参考.md) | Constants and types |
+| [Notes & Formats](src/components/onlyoffice-web-comp/docs/注意事项与支持格式.md) | Prerequisites and formats |
+| [Fonts](src/components/onlyoffice-web-comp/docs/字体配置.md) | Custom font registration |
+| [Comments & Revisions](src/components/onlyoffice-web-comp/docs/批注修订与-Word-API.md) | Comments and revisions |
+| [Single-instance Demo](src/components/onlyoffice-web-comp/docs/单实例示例.md) | Single editor demo + source |
+| [Multi-instance Demo](src/components/onlyoffice-web-comp/docs/多实例示例.md) | Full Tab demo source |
 
 ```typescript
 import { OnlyOfficeManager, FILE_TYPE, ONLYOFFICE_ID } from "@/components/onlyoffice-web-comp";
@@ -79,7 +79,7 @@ onlyoffice-web-comp/
 │   │   ├── docs/                         # Documentation site
 │   │   │   ├── page.tsx                  # /docs (overview md)
 │   │   │   ├── [slug]/page.tsx           # /docs/*
-│   │   │   └── demos/page.tsx            # /docs/demos?tab=single|multi
+│   │   │   └── demos/                    # /docs/demos/single|multi
 │   │   └── examples/                     # → redirect to multi demo
 │   ├── features/
 │   │   ├── docs/                         # Docs shell, markdown renderer, site-map
@@ -143,7 +143,7 @@ OnlyOfficeManager.registerStaticResource({
 
 ## Fonts
 
-Custom fonts are registered via **`__custom_font_registry__`**, with **`ttf-to-catalog-font.mjs`** producing OnlyOffice catalog wire-format files. See **[10 - Fonts](src/components/onlyoffice-web-comp/docs/10-字体配置.md)** in the component docs for the full guide.
+Custom fonts are registered via **`__custom_font_registry__`**, with **`ttf-to-catalog-font.mjs`** producing OnlyOffice catalog wire-format files. See **[Fonts](src/components/onlyoffice-web-comp/docs/字体配置.md)** in the component docs for the full guide.
 
 Quick outline:
 

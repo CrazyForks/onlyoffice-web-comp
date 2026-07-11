@@ -2,7 +2,7 @@
 
 /**
  * 单实例演示页：OnlyOfficeManager 门面 + 工具栏（上传/导出/主题/语言/只读）。
- * 文档说明见 `onlyoffice-web-comp/docs/08-单实例示例.md`。
+ * 文档说明见 `onlyoffice-web-comp/docs/单实例示例.md`。
  */
 import { memo, useEffect, useRef, useState } from "react";
 import {
@@ -275,6 +275,10 @@ export function OfficePreviewPage({
       await manager.downloadExport();
     }, "导出失败");
 
+  const handlePrintLogs = () => {
+    managerRef.current?.printLogs();
+  };
+
   const handleToggleReadOnly = () =>
     runAction(async () => {
       const manager = managerRef.current;
@@ -314,6 +318,7 @@ export function OfficePreviewPage({
             {editorReady && (
               <>
                 <DemoButton onClick={handleExport}>导出</DemoButton>
+                <DemoButton onClick={handlePrintLogs}>打印日志</DemoButton>
                 <DemoButton active={readOnly} onClick={handleToggleReadOnly}>
                   {readOnly ? "只读" : "编辑"}
                 </DemoButton>
