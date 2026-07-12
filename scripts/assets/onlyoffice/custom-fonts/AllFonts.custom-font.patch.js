@@ -87,6 +87,47 @@ window["__custom_font_registry__"] = {
   "use strict";
   var registry = window.__custom_font_registry__ || {};
 
+  // SDK 会把系统剪贴板的 text/html 写进 sandboxed 临时 iframe。系统应用产生
+  // 的 HTML 可能含 srcdoc / iframe 或非标准事件属性，正则无法可靠去除；先在
+  // detached document 中解析并移除可执行节点，再交给 SDK 的图片/格式解析器。
+  window.__ONLYOFFICE_SANITIZE_PASTE_HTML__ = function (html) {
+    if (typeof html !== "string") return html;
+    try {
+      var doc = document.implementation.createHTMLDocument("onlyoffice-paste");
+      doc.body.innerHTML = html;
+      var unsafeNodes = doc.querySelectorAll(
+        "script,iframe,frame,frameset,object,embed,applet,portal",
+      );
+      for (var i = unsafeNodes.length - 1; i >= 0; i--) {
+        unsafeNodes[i].parentNode.removeChild(unsafeNodes[i]);
+      }
+      var elements = doc.querySelectorAll("*");
+      for (var j = 0; j < elements.length; j++) {
+        var element = elements[j];
+        for (var k = element.attributes.length - 1; k >= 0; k--) {
+          var attribute = element.attributes[k];
+          var name = attribute.name.toLowerCase();
+          var value = attribute.value || "";
+          if (
+            name.indexOf("on") === 0 ||
+            name === "srcdoc" ||
+            ((name === "src" || name === "href" || name === "xlink:href") &&
+              /^\s*(?:javascript:|vbscript:|data:text\/html)/i.test(value))
+          ) {
+            element.removeAttribute(attribute.name);
+          }
+        }
+      }
+      return "<!doctype html><html><body>" + doc.body.innerHTML + "</body></html>";
+    } catch (err) {
+      // 最小兜底；正常浏览器都会走上方 detached DOM 路径。
+      return html
+        .replace(/<script[^>]*>[^]*?<[/]script>/gi, "")
+        .replace(/<script[^>]*>/gi, "")
+        .replace(/[ ]on[a-z]+=[^ >]*/gi, "");
+    }
+  };
+
   function patchComboBoxFonts() {
     var proto =
       window.Common &&
@@ -97,24 +138,143 @@ window["__custom_font_registry__"] = {
       return !!proto;
     }
 
+    function sanitizeStore(store) {
+      // 完整补丁安装后优先走它的 sprite 边界检测；早期初始化时则使用
+      // 保守兜底，避免 font file 的字节偏移被当成缩略图索引。
+      if (typeof window.__sanitizeCustomFontComboStore === "function") {
+        window.__sanitizeCustomFontComboStore(store);
+        return;
+      }
+      if (!store || typeof store.each !== "function") return;
+      store.each(function (model) {
+        if (!model || typeof model.get !== "function") return;
+        var idx = model.get("imgidx");
+        if (typeof idx !== "number" || !isFinite(idx) || idx < 0 || idx > 512) {
+          model.set("imgidx", 0, { silent: true });
+        }
+      });
+    }
+
+    function forceSafeSpriteIndexes(store) {
+      if (!store || typeof store.each !== "function") return;
+      store.each(function (model) {
+        if (!model || typeof model.get !== "function") return;
+        var idx = model.get("imgidx");
+        if (typeof idx !== "number" || !isFinite(idx) || idx < 0 || idx > 512) {
+          // updateVisibleFontsTiles 会在当前调用栈同步读取 imgidx；用 silent
+          // 避免 model change 触发二次渲染，留下已清理的值交给本次重试。
+          model.set("imgidx", 0, { silent: true });
+        }
+      });
+    }
+
+    function patchSpriteThumbDecoder(combo) {
+      var sprite = combo && combo.spriteThumbs;
+      if (!sprite || typeof sprite.getImage !== "function" || sprite.__CUSTOM_FONT_SPRITE_GUARD__) {
+        return;
+      }
+      var origGetImage = sprite.getImage;
+      sprite.getImage = function (index) {
+        // updateVisibleFontsTiles 会将 imgidx/r 传到这里。部分自定义字体的
+        // imgidx 实为字节偏移（33600 / 134400），且可在 store 清理后的
+        // 虚拟滚动回调中才出现；在最终解码入口钳制才是可靠边界。
+        var maxIndex =
+          typeof this.count === "number" && isFinite(this.count) && this.count > 0
+            ? Math.floor(this.count) - 1
+            : 512;
+        if (
+          typeof index !== "number" ||
+          !isFinite(index) ||
+          index < 0 ||
+          Math.floor(index) !== index ||
+          index > maxIndex
+        ) {
+          index = 0;
+        }
+        var args = Array.prototype.slice.call(arguments);
+        args[0] = index;
+        return origGetImage.apply(this, args);
+      };
+      sprite.__CUSTOM_FONT_SPRITE_GUARD__ = true;
+    }
+
     if (typeof proto.selectCandidate === "function") {
       var origSelectCandidate = proto.selectCandidate;
       proto.selectCandidate = function (isExact) {
-        // 9.4 会把 imgidx 当 sprite index。自定义字体记录有时将文件偏移
-        // （例如 134400）写到这里，导致 getImage 分配超大 TypedArray。
-        if (this.store && typeof this.store.each === "function") {
-          this.store.each(function (model) {
-            if (!model || typeof model.get !== "function") return;
-            var idx = model.get("imgidx");
-            if (typeof idx !== "number" || !isFinite(idx) || idx < 0 || idx > 512) {
-              model.set("imgidx", 0);
-            }
-          });
-        }
+        sanitizeStore(this.store);
         if (this.store && typeof this.store.toJSON === "function") {
           this._fontsArray = this.store.toJSON();
         }
-        return origSelectCandidate.call(this, isExact);
+        var result = origSelectCandidate.call(this, isExact);
+        // selectCandidate 会把候选字体复制到 store / 最近使用项；复制完成后
+        // 再清理一次，确保渲染函数拿不到 134400 这类文件偏移。
+        sanitizeStore(this.store);
+        return result;
+      };
+    }
+
+    function refreshPasteCandidate(combo) {
+      if (!combo || !combo._input) return;
+      sanitizeStore(combo.store);
+      forceSafeSpriteIndexes(combo.store);
+      if (combo.store && typeof combo.store.toJSON === "function") {
+        combo._fontsArray = combo.store.toJSON();
+      }
+      if (typeof combo.selectCandidate === "function") {
+        combo.selectCandidate(true);
+      }
+    }
+
+    // OnlyOffice 的字体候选搜索原本只在 keyup 中执行。系统粘贴没有普通
+    // 字符 keyup，导致“仿宋_GB2312”等别名在回车时回退为等线。
+    if (typeof proto.onInputKeyDown === "function") {
+      var origInputKeyDown = proto.onInputKeyDown;
+      proto.onInputKeyDown = function (event) {
+        var result = origInputKeyDown.apply(this, arguments);
+        var isPaste =
+          event &&
+          (event.ctrlKey || event.metaKey) &&
+          (event.keyCode === 86 || event.key === "v" || event.key === "V");
+        if (isPaste) {
+          var combo = this;
+          window.setTimeout(function () {
+            refreshPasteCandidate(combo);
+          }, 0);
+        }
+        return result;
+      };
+    }
+
+    if (typeof proto.onInputChanged === "function") {
+      var origInputChanged = proto.onInputChanged;
+      proto.onInputChanged = function () {
+        // Ctrl/Cmd+V 后紧接 Enter 时，先于原始 change 回调建立精确候选。
+        refreshPasteCandidate(this);
+        return origInputChanged.apply(this, arguments);
+      };
+    }
+
+    if (typeof proto.updateVisibleFontsTiles === "function") {
+      var origUpdateVisibleFontsTiles = proto.updateVisibleFontsTiles;
+      proto.updateVisibleFontsTiles = function () {
+        sanitizeStore(this.store);
+        forceSafeSpriteIndexes(this.store);
+        patchSpriteThumbDecoder(this);
+        try {
+          return origUpdateVisibleFontsTiles.apply(this, arguments);
+        } catch (err) {
+          // 个别 DOCX 的字体列表会在菜单打开时由 SDK 异步补项；若该补项
+          // 恰好携带 font file offset，第一次渲染仍可能命中旧值。清理后仅
+          // 重试一次，正常错误仍原样抛出。
+          if (
+            err instanceof RangeError &&
+            /Invalid typed array length/.test(String(err && err.message))
+          ) {
+            forceSafeSpriteIndexes(this.store);
+            return origUpdateVisibleFontsTiles.apply(this, arguments);
+          }
+          throw err;
+        }
       };
     }
 

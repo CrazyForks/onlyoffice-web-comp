@@ -18,6 +18,9 @@
 #     - internal/editor/utils.ts：getX2tConvertFormats / getX2tExportFormats（formatTo 须为 CANVAS 类型）
 #     - internal/editor/server.ts：loadDocument 传入 formatFrom / formatTo
 #     - internal/editor/types.ts：AvsFileType 枚举是否与新 x2t 一致
+#   富文本粘贴
+#     - sdkjs/{word,cell,slide}/sdk-all.js：粘贴临时 iframe 写入前须移除 script，
+#       保持 sandbox 不含 allow-scripts，避免浏览器控制台报错及执行剪贴板脚本
 #
 # Usage:
 #   ./scripts/extract-documentserver-assets.sh
@@ -142,6 +145,7 @@ extract_all_assets() {
   disable_service_workers
   install_cross_origin_bridge
   install_root_editor_configs
+  install_paste_html_sanitizer
   install_custom_font_registry
   install_presenter_bridge
 
@@ -162,6 +166,28 @@ install_root_editor_configs() {
     "${OUT_DIR}/plugins.json"
   cp "${REPO_ROOT}/scripts/assets/onlyoffice/themes.json" \
     "${OUT_DIR}/themes.json"
+}
+
+install_paste_html_sanitizer() {
+  local editor file
+
+  # 9.4 将 text/html 直接 document.write 到 sandbox="allow-same-origin" 的临时
+  # iframe。剪贴板 HTML 含 script 时浏览器会阻止执行并打印控制台错误。不能简单
+  # 添加 allow-scripts（那会在编辑器同源上下文执行不受信任的剪贴板脚本），而应在
+  # 写入前移除 script；图片、样式和其他 HTML 内容仍由原生粘贴解析器处理。
+  log "修复富文本粘贴临时 iframe 的 script 过滤 …"
+  for editor in word cell slide; do
+    file="${OUT_DIR}/sdkjs/${editor}/sdk-all.js"
+    [[ -f "$file" ]] || die "缺少粘贴 SDK: ${file}"
+
+    if rg -q '__ONLYOFFICE_SANITIZE_PASTE_HTML__' "$file"; then
+      continue
+    fi
+    rg -q 'u\.document\.write\([hp]\)' "$file" \
+      || die "未找到 ${editor} 的 9.4 粘贴 iframe 写入点"
+
+    perl -0pi -e 's#u\.document\.write\(([hp])\)#u.document.write(a.__ONLYOFFICE_SANITIZE_PASTE_HTML__ ? a.__ONLYOFFICE_SANITIZE_PASTE_HTML__($1) : $1.replace(/<script[^>]*>[^]*?<[/]script>/gi, "").replace(/<script[^>]*>/gi, "").replace(/[ ]on[a-z]+=[^ >]*/gi, ""))#' "$file"
+  done
 }
 
 disable_service_workers() {

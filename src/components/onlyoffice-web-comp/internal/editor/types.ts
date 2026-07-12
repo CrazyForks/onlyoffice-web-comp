@@ -1,7 +1,10 @@
 import type { EditorLogger } from "./logger";
 
 export type OnlyOfficeConnectorOptions = {
-  /** 默认 true；设为 false 时由调用方显式调用 connect()。 */
+  /**
+   * 默认 true；首次创建时设为 false 则由调用方显式调用 connect()。
+   * 同一编辑器的后续 createConnector 调用会复用已有实例。
+   */
   autoconnect?: boolean;
 };
 

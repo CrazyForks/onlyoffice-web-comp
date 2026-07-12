@@ -265,6 +265,119 @@ test("9.4 multi-instance demo keeps one connector per editor", async ({ page }) 
   });
 });
 
+test("9.4 spreadsheet paste filters scripts before writing its sandboxed frame", async ({
+  page,
+}) => {
+  await page.goto("/docs/demos/multi", { waitUntil: "domcontentloaded" });
+  await page.getByTitle("新建 Excel 标签页").click();
+  await expect
+    .poll(() =>
+      page
+        .frames()
+        .some((frame) => frame.url().includes("/spreadsheeteditor/main/")),
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+
+  const spreadsheetFrame = page
+    .frames()
+    .find((frame) => frame.url().includes("/spreadsheeteditor/main/"));
+  if (!spreadsheetFrame) {
+    throw new Error("The spreadsheet editor iframe did not load");
+  }
+  await expect(spreadsheetFrame.locator("#editor_sdk")).toBeVisible({
+    timeout: 60_000,
+  });
+  await expect
+    .poll(() =>
+      spreadsheetFrame.evaluate(() => {
+        const win = window as unknown as {
+          AscCommon?: { PL?: { "p$b"?: unknown; Wb?: unknown } };
+        };
+        return (
+          typeof win.AscCommon?.PL?.["p$b"] === "function" &&
+          !!win.AscCommon.PL.Wb
+        );
+      }),
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+
+  const result = await spreadsheetFrame.evaluate(() => {
+    const win = window as unknown as {
+      AscCommon: { PL: { "p$b": (html: string, text: string) => void } };
+      __pasteScriptExecuted?: boolean;
+    };
+    win.__pasteScriptExecuted = false;
+    win.AscCommon.PL["p$b"](
+      '<img alt="clipboard-image" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" onload="window.__pasteScriptExecuted=true"><iframe srcdoc="<script>window.__pasteScriptExecuted=true</script>"></iframe><script>window.__pasteScriptExecuted=true</script>',
+      "",
+    );
+    const pasteFrame = document.getElementById(
+      "asc_pasteFrame",
+    ) as HTMLIFrameElement | null;
+    return {
+      sandbox: pasteFrame?.getAttribute("sandbox"),
+      scriptExecuted: win.__pasteScriptExecuted,
+      html: pasteFrame?.contentDocument?.body.innerHTML ?? "",
+    };
+  });
+
+  expect(result.sandbox).toBe("allow-same-origin");
+  expect(result.scriptExecuted).toBe(false);
+  expect(result.html).not.toContain("<script");
+  expect(result.html).not.toContain("onload=");
+  expect(result.html).not.toContain("<iframe");
+});
+
+test("9.4 Word selects the 仿宋_GB2312 custom-font alias without invalid thumbnails", async ({
+  page,
+}) => {
+  const runtimeErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") runtimeErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => runtimeErrors.push(error.message));
+
+  await page.goto("/docs/demos/single", { waitUntil: "domcontentloaded" });
+  await expect
+    .poll(() =>
+      page
+        .frames()
+        .some((frame) => frame.url().includes("/documenteditor/main/")),
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+
+  const documentFrame = page
+    .frames()
+    .find((frame) => frame.url().includes("/documenteditor/main/"));
+  if (!documentFrame) {
+    throw new Error("The document editor iframe did not load");
+  }
+  await expect
+    .poll(() =>
+      documentFrame.evaluate(() =>
+        Boolean(window.Common?.UI?.ComboBoxFonts),
+      ),
+    )
+    .toBe(true);
+
+  const fontInput = documentFrame.locator("#slot-field-fontname input");
+  await fontInput.click();
+  await fontInput.press("ArrowDown");
+  await fontInput.fill("仿宋_GB2312");
+  await fontInput.press("Enter");
+  await page.waitForTimeout(500);
+
+  await expect(fontInput).toHaveValue("仿宋_GB2312");
+  expect(
+    runtimeErrors.filter((message) =>
+      message.includes("Invalid typed array length"),
+    ),
+  ).toEqual([]);
+});
+
 test("9.4 Cell and Slide keep native fonts while resolving 方正小标宋简体", async ({
   page,
 }) => {

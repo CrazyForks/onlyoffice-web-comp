@@ -101,7 +101,7 @@ type OnlyOfficeStaticResourceOptions = {
 | `exportDocument()` | 导出 bin 数据 |
 | `exportAsBlob()` | 导出为 Blob |
 | `downloadExport()` | 导出并触发浏览器下载 |
-| `createConnector(options?)` | 创建 Developer Edition Connector；销毁或重开编辑器时自动断开 |
+| `createConnector(options?)` | 获取当前编辑器唯一的 Developer Edition Connector；销毁或重开编辑器时自动断开 |
 | `onLoadingChange(handler)` | 监听 loading，返回取消函数 |
 | `getEditor()` | 获取底层 `EditorManager` |
 | `getLogger()` | 获取当前实例的 `EditorLogger` |
@@ -110,7 +110,7 @@ type OnlyOfficeStaticResourceOptions = {
 
 ### Developer Edition Connector
 
-`createConnector()` 返回 OnlyOffice Connector，用于从父页面调用编辑器的 Automation API。连接器会使用当前 iframe 的真实 `frameEditorId`，本地和 CDN 跨域模式均可用；编辑器销毁或重开文档时组件会自动断开全部已创建的 connector。
+`createConnector()` 返回当前编辑器唯一的 OnlyOffice Connector，用于从父页面调用编辑器的 Automation API。重复调用会返回同一实例（与 `getLogger()` 的生命周期一致），连接器会使用当前 iframe 的真实 `frameEditorId`，本地和 CDN 跨域模式均可用；编辑器销毁或重开文档时组件会自动断开并释放它。
 
 ```typescript
 const connector = manager.createConnector();
@@ -313,7 +313,7 @@ editorManagerFactory.destroyAll();
 }
 ```
 
-多实例下 `export()` 通过 `instanceId` 过滤 `SAVE_DOCUMENT` 事件。只读模式下直接返回已缓存的 `binData`。
+多实例下 `export()` 通过 `instanceId`（固定等于当前 `containerId`）过滤 `SAVE_DOCUMENT` 事件。只读模式下直接返回已缓存的 `binData`。
 
 ### 文档格式转换
 
