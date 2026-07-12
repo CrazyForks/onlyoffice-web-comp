@@ -1,9 +1,28 @@
+import path from "node:path";
 import { expect, test } from "playwright/test";
 
 const assetOrigin = `http://${process.env.PLAYWRIGHT_HOST ?? "127.0.0.1"}:${
   process.env.PLAYWRIGHT_CDN_PORT ?? 3010
 }`;
 const deRoot = `${assetOrigin}/onlyoffice/9.4.0-develop`;
+
+test("9.4 DE serves root plugin and theme configs", async ({ page }) => {
+  await page.goto(`${deRoot}/web-apps/apps/api/documents/preload.html`, {
+    waitUntil: "networkidle",
+  });
+  const status = await page.evaluate(async () =>
+    Promise.all(
+      ["plugins.json", "themes.json"].map(async (fileName) => ({
+        fileName,
+        status: (await fetch(`../../../../${fileName}`)).status,
+      })),
+    ),
+  );
+  expect(status).toEqual([
+    { fileName: "plugins.json", status: 200 },
+    { fileName: "themes.json", status: 200 },
+  ]);
+});
 
 test("9.4 DE registers the migrated custom font catalog", async ({ page }) => {
   await page.goto(`${deRoot}/web-apps/apps/api/documents/preload.html`, {
@@ -97,6 +116,388 @@ test("9.4 DE presenter view installs the opener bridge before RequireJS", async 
     .toEqual({ injected: true, require: "function" });
 
   await popup.close();
+});
+
+test("9.4 demo calls the Developer Edition connector", async ({ page }) => {
+  await page.goto("/docs/demos/single", { waitUntil: "domcontentloaded" });
+  await expect
+    .poll(() =>
+      page
+        .frames()
+        .some((frame) => frame.url().includes("/web-apps/apps/documenteditor/main/")),
+    )
+    .toBe(true);
+
+  const editorFrame = page
+    .frames()
+    .find((frame) => frame.url().includes("/web-apps/apps/documenteditor/main/"));
+  if (!editorFrame) {
+    throw new Error("The 9.4 Word editor iframe did not load");
+  }
+  // iframe 创建完成不代表编辑器已开始处理 Connector 消息；等待文档画布就绪。
+  await expect(editorFrame.locator("#id_viewer_overlay")).toBeVisible({
+    timeout: 60_000,
+  });
+
+  const documentCanvas = editorFrame.locator("#id_viewer");
+  const before = await documentCanvas.evaluate((canvas) => {
+    const context = (canvas as HTMLCanvasElement).getContext("2d");
+    const data = context?.getImageData(0, 0, canvas.width, canvas.height).data;
+    if (!data) return 0;
+    let checksum = 0;
+    for (let index = 0; index < data.length; index += 16) {
+      checksum = (checksum + data[index] + data[index + 1] + data[index + 2]) >>> 0;
+    }
+    return checksum;
+  });
+
+  await page.getByRole("button", { name: "连接器写入" }).click();
+  await expect(page.getByRole("status")).toHaveText(
+    "Connector: inserted a paragraph",
+    { timeout: 10_000 },
+  );
+  await expect
+    .poll(() =>
+      documentCanvas.evaluate((canvas) => {
+        const context = (canvas as HTMLCanvasElement).getContext("2d");
+        const data = context?.getImageData(0, 0, canvas.width, canvas.height).data;
+        if (!data) return 0;
+        let checksum = 0;
+        for (let index = 0; index < data.length; index += 16) {
+          checksum =
+            (checksum + data[index] + data[index + 1] + data[index + 2]) >>> 0;
+        }
+        return checksum;
+      }),
+    )
+    .not.toBe(before);
+});
+
+test("9.4 Word exports PDF through the compatible x2t pair", async ({ page }) => {
+  const x2tRequests: string[] = [];
+  const exportErrors: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/x2t/")) {
+      x2tRequests.push(request.url());
+    }
+  });
+  page.on("console", (message) => {
+    if (
+      message.type() === "error" &&
+      /x2t conversion produced no output|downloadAs failed/.test(message.text())
+    ) {
+      exportErrors.push(message.text());
+    }
+  });
+
+  await page.goto("/docs/demos/single", { waitUntil: "domcontentloaded" });
+  await expect
+    .poll(() =>
+      page
+        .frames()
+        .some((frame) => frame.url().includes("/web-apps/apps/documenteditor/main/")),
+    )
+    .toBe(true);
+  const editorFrame = page
+    .frames()
+    .find((frame) => frame.url().includes("/web-apps/apps/documenteditor/main/"));
+  if (!editorFrame) {
+    throw new Error("The 9.4 Word editor iframe did not load");
+  }
+  await expect(editorFrame.locator("#id_viewer_overlay")).toBeVisible({
+    timeout: 60_000,
+  });
+
+  await editorFrame.getByRole("tab", { name: "文件" }).click();
+  await editorFrame.locator("a.menu-item").filter({ hasText: "下载为" }).click();
+  const downloadPromise = page.waitForEvent("download", { timeout: 60_000 });
+  await editorFrame.locator('.btn-doc-format[format="513"]').click();
+  const download = await downloadPromise;
+
+  expect(download.suggestedFilename()).toMatch(/\.pdf$/i);
+  await expect.poll(() => download.failure()).toBeNull();
+  expect(x2tRequests).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining("/packages/onlyoffice/9.3.0/x2t/x2t.js"),
+      expect.stringContaining("/packages/onlyoffice/9.3.0/x2t/x2t.wasm"),
+    ]),
+  );
+  expect(exportErrors).toEqual([]);
+});
+
+test("9.4 multi-instance demo keeps one connector per editor", async ({ page }) => {
+  await page.goto("/docs/demos/multi", { waitUntil: "domcontentloaded" });
+  await expect
+    .poll(() =>
+      page
+        .frames()
+        .some((frame) => frame.url().includes("/web-apps/apps/documenteditor/main/")),
+    )
+    .toBe(true);
+
+  await page.getByRole("button", { name: "连接器写入" }).click();
+  await expect(page.getByRole("status")).toHaveText(
+    "Connector: inserted a paragraph",
+    { timeout: 10_000 },
+  );
+
+  await page.getByTitle("新建 Excel 标签页").click();
+  await expect
+    .poll(() =>
+      page
+        .frames()
+        .some((frame) => frame.url().includes("/web-apps/apps/spreadsheeteditor/main/")),
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+  const spreadsheetFrame = page
+    .frames()
+    .find((frame) => frame.url().includes("/web-apps/apps/spreadsheeteditor/main/"));
+  if (!spreadsheetFrame) {
+    throw new Error("The multi-instance Excel editor did not load");
+  }
+  await expect(spreadsheetFrame.locator("#editor_sdk")).toBeVisible({
+    timeout: 60_000,
+  });
+  await page.getByRole("button", { name: "连接器写入" }).click();
+  await expect(page.getByRole("status")).toHaveText("Connector: wrote to A1", {
+    timeout: 10_000,
+  });
+});
+
+test("9.4 Cell and Slide keep native fonts while resolving 方正小标宋简体", async ({
+  page,
+}) => {
+  let customFontBinaryLoaded = false;
+  const runtimeErrors: string[] = [];
+  page.on("response", (response) => {
+    if (/\/fonts\/1002(?:[?#]|$)/.test(response.url()) && response.ok()) {
+      customFontBinaryLoaded = true;
+    }
+  });
+  page.on("pageerror", (error) => runtimeErrors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error") runtimeErrors.push(message.text());
+  });
+  await page.goto("/docs/demos/multi", { waitUntil: "domcontentloaded" });
+
+  await page.getByTitle("新建 Excel 标签页").click();
+  await expect
+    .poll(() =>
+      page
+        .frames()
+        .some((frame) => frame.url().includes("/web-apps/apps/spreadsheeteditor/main/")),
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+  const spreadsheetFrame = page
+    .frames()
+    .find((frame) => frame.url().includes("/web-apps/apps/spreadsheeteditor/main/"));
+  if (!spreadsheetFrame) throw new Error("The Excel editor did not load");
+  await expect(spreadsheetFrame.locator("#editor_sdk")).toBeVisible({
+    timeout: 60_000,
+  });
+  await expect
+    .poll(() =>
+      spreadsheetFrame.evaluate(() => ({
+        patched: window.AscFonts?.__CUSTOM_PICK_FONT_PATCHED__ === true,
+        resolver:
+          window.AscFonts?.JZ?.__CUSTOM_FONT_REGISTRY_RESOLVER_PATCHED__ === true,
+        custom: window.AscFonts?.pickFont?.("方正小标宋简体")?.Xa,
+        native: window.AscFonts?.JZ
+          ?.rM?.("方正小标宋简体")
+          ?.SEe?.(window.AscCommon?.O4, 0)?.file?.Xa,
+        arial: window.AscFonts?.pickFont?.("Arial")?.Xa,
+      })),
+    )
+    .toEqual({
+      patched: true,
+      resolver: true,
+      custom: "1002",
+      native: "1002",
+      arial: "022",
+    });
+
+  // 使用编辑器公开 API 验证实际异步加载器会请求 custom binary；避免刚创建
+  // tab 时的初始化遮罩让 UI click 的时序主导测试结果。
+  expect(
+    await spreadsheetFrame.evaluate(() => {
+      const editor = window.Asc?.editor as {
+        asc_loadFontsFromServer?: (fontNames: string[]) => void;
+      };
+      if (typeof editor.asc_loadFontsFromServer !== "function") {
+        return false;
+      }
+      editor.asc_loadFontsFromServer(["方正小标宋简体"]);
+      return true;
+    }),
+  ).toBe(true);
+
+  await page.getByTitle("新建 PPT 标签页").click();
+  await expect
+    .poll(() =>
+      page
+        .frames()
+        .some((frame) => frame.url().includes("/web-apps/apps/presentationeditor/main/")),
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+  const presentationFrame = page
+    .frames()
+    .find((frame) => frame.url().includes("/web-apps/apps/presentationeditor/main/"));
+  if (!presentationFrame) throw new Error("The PPT editor did not load");
+  await expect(presentationFrame.locator("#editor_sdk")).toBeVisible({
+    timeout: 60_000,
+  });
+  await expect
+    .poll(() =>
+      presentationFrame.evaluate(() => ({
+        patched: window.AscFonts?.__CUSTOM_PICK_FONT_PATCHED__ === true,
+        resolver:
+          window.AscFonts?.LU?.__CUSTOM_FONT_REGISTRY_RESOLVER_PATCHED__ === true,
+        picker: window.AscFonts?.LU?.gLc?.("方正小标宋简体")?.fba,
+        custom: window.AscFonts?.pickFont?.("方正小标宋简体")?.Na,
+        native: window.AscFonts?.LU
+          ?.FG?.("方正小标宋简体")
+          ?.Gee?.(window.AscCommon?.jY, 0)?.file?.Na,
+        arial: window.AscFonts?.pickFont?.("Arial")?.Na,
+      })),
+    )
+    .toEqual({
+      patched: true,
+      resolver: true,
+      picker: "方正小标宋简体",
+      custom: "1002",
+      native: "1002",
+      arial: "022",
+    });
+  expect(
+    await presentationFrame.evaluate(() => {
+      const editor = window.Asc?.editor as {
+        asc_loadFontsFromServer?: (fontNames: string[]) => void;
+      };
+      if (typeof editor.asc_loadFontsFromServer !== "function") {
+        return false;
+      }
+      editor.asc_loadFontsFromServer(["方正小标宋简体"]);
+      return true;
+    }),
+  ).toBe(true);
+  await expect.poll(() => customFontBinaryLoaded).toBe(true);
+  expect(runtimeErrors).toEqual([]);
+});
+
+test("9.4 demo writes A1 after uploading an Excel workbook", async ({ page }) => {
+  let customFontLoadedFromWorkbook = false;
+  page.on("response", (response) => {
+    if (/\/fonts\/1003(?:[?#]|$)/.test(response.url()) && response.ok()) {
+      customFontLoadedFromWorkbook = true;
+    }
+  });
+  await page.goto("/docs/demos/single", { waitUntil: "domcontentloaded" });
+  const fileChooser = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "上传" }).click();
+  await (await fileChooser).setFiles(path.join(process.cwd(), "public/test.xlsx"));
+
+  await expect
+    .poll(() =>
+      page
+        .frames()
+        .some((frame) => frame.url().includes("/web-apps/apps/spreadsheeteditor/main/")),
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+  const editorFrame = page
+    .frames()
+    .find((frame) => frame.url().includes("/web-apps/apps/spreadsheeteditor/main/"));
+  if (!editorFrame) {
+    throw new Error("The uploaded XLSX did not open in the spreadsheet editor");
+  }
+  await expect(editorFrame.locator("#editor_sdk")).toBeVisible({
+    timeout: 60_000,
+  });
+  const worksheetCanvas = editorFrame.locator("#ws-canvas");
+  await expect(worksheetCanvas).toBeVisible();
+  await expect(editorFrame.locator('input[aria-label="字体 "]')).toHaveValue(
+    "仿宋_GB2312",
+  );
+  await expect
+    .poll(() =>
+      editorFrame.evaluate(() => ({
+        resolvedName: window.AscFonts?.JZ?.xMd?.("仿宋_GB2312")?.Rma,
+        resolvedFile: window.AscFonts?.JZ
+          ?.rM?.("仿宋_GB2312")
+          ?.SEe?.(window.AscCommon?.O4, 0)?.file?.Xa,
+      })),
+    )
+    .toEqual({ resolvedName: "仿宋_GB2312", resolvedFile: "1003" });
+  await expect.poll(() => customFontLoadedFromWorkbook).toBe(true);
+
+  const before = await worksheetCanvas.evaluate((canvas) => {
+    const context = (canvas as HTMLCanvasElement).getContext("2d");
+    const data = context?.getImageData(0, 0, canvas.width, canvas.height).data;
+    if (!data) return 0;
+    let checksum = 0;
+    for (let index = 0; index < data.length; index += 16) {
+      checksum = (checksum + data[index] + data[index + 1] + data[index + 2]) >>> 0;
+    }
+    return checksum;
+  });
+
+  // public/test.xlsx 的活动单元格 C4 已使用仿宋_GB2312。切换到 Arial 后
+  // 画布必须变化；再切回 custom font 必须恢复原图，覆盖文件加载后的排版路径。
+  await editorFrame.evaluate(() => window.Asc?.editor?.asc_setCellFontName?.("Arial"));
+  await expect
+    .poll(() =>
+      worksheetCanvas.evaluate((canvas) => {
+        const context = (canvas as HTMLCanvasElement).getContext("2d");
+        const data = context?.getImageData(0, 0, canvas.width, canvas.height).data;
+        if (!data) return 0;
+        let checksum = 0;
+        for (let index = 0; index < data.length; index += 16) {
+          checksum = (checksum + data[index] + data[index + 1] + data[index + 2]) >>> 0;
+        }
+        return checksum;
+      }),
+    )
+    .not.toBe(before);
+  await editorFrame.evaluate(() =>
+    window.Asc?.editor?.asc_setCellFontName?.("仿宋_GB2312"),
+  );
+  await expect
+    .poll(() =>
+      worksheetCanvas.evaluate((canvas) => {
+        const context = (canvas as HTMLCanvasElement).getContext("2d");
+        const data = context?.getImageData(0, 0, canvas.width, canvas.height).data;
+        if (!data) return 0;
+        let checksum = 0;
+        for (let index = 0; index < data.length; index += 16) {
+          checksum = (checksum + data[index] + data[index + 1] + data[index + 2]) >>> 0;
+        }
+        return checksum;
+      }),
+    )
+    .toBe(before);
+
+  await page.getByRole("button", { name: "连接器写入" }).click();
+  await expect(page.getByRole("status")).toHaveText("Connector: wrote to A1", {
+    timeout: 10_000,
+  });
+  await expect
+    .poll(() =>
+      worksheetCanvas.evaluate((canvas) => {
+        const context = (canvas as HTMLCanvasElement).getContext("2d");
+        const data = context?.getImageData(0, 0, canvas.width, canvas.height).data;
+        if (!data) return 0;
+        let checksum = 0;
+        for (let index = 0; index < data.length; index += 16) {
+          checksum =
+            (checksum + data[index] + data[index + 1] + data[index + 2]) >>> 0;
+        }
+        return checksum;
+      }),
+    )
+    .not.toBe(before);
 });
 
 test("9.4 Word loads built-in and 方正小标宋简体 fonts", async ({ page }) => {

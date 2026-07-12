@@ -141,6 +141,7 @@ extract_all_assets() {
   # 静态 SDK，不能让编辑器注册作用域过大的 SW（也不需要其离线缓存）。
   disable_service_workers
   install_cross_origin_bridge
+  install_root_editor_configs
   install_custom_font_registry
   install_presenter_bridge
 
@@ -152,6 +153,15 @@ extract_all_assets() {
   if [[ "$font_count" -eq 0 ]]; then
     die "fonts 目录为空"
   fi
+}
+
+install_root_editor_configs() {
+  # 编辑器会从静态根目录读取这两个可选配置。Document Server 的 Nginx
+  # 默认提供空配置；纯静态托管必须显式补齐，否则会产生 404。
+  cp "${REPO_ROOT}/scripts/assets/onlyoffice/plugins.json" \
+    "${OUT_DIR}/plugins.json"
+  cp "${REPO_ROOT}/scripts/assets/onlyoffice/themes.json" \
+    "${OUT_DIR}/themes.json"
 }
 
 disable_service_workers() {

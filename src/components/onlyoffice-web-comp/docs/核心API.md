@@ -101,11 +101,27 @@ type OnlyOfficeStaticResourceOptions = {
 | `exportDocument()` | 导出 bin 数据 |
 | `exportAsBlob()` | 导出为 Blob |
 | `downloadExport()` | 导出并触发浏览器下载 |
+| `createConnector(options?)` | 创建 Developer Edition Connector；销毁或重开编辑器时自动断开 |
 | `onLoadingChange(handler)` | 监听 loading，返回取消函数 |
 | `getEditor()` | 获取底层 `EditorManager` |
 | `getLogger()` | 获取当前实例的 `EditorLogger` |
 | `printLogs()` | 将当前实例日志历史打印到控制台 |
 | `destroy()` | 销毁实例 |
+
+### Developer Edition Connector
+
+`createConnector()` 返回 OnlyOffice Connector，用于从父页面调用编辑器的 Automation API。连接器会使用当前 iframe 的真实 `frameEditorId`，本地和 CDN 跨域模式均可用；编辑器销毁或重开文档时组件会自动断开全部已创建的 connector。
+
+```typescript
+const connector = manager.createConnector();
+
+connector.executeMethod("GetEditorType", [], () => {
+  console.log("Connector request completed");
+});
+
+// 可提前释放；不调用也会在 manager.destroy() 时自动断开。
+connector.disconnect();
+```
 
 ### 实例日志
 

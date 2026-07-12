@@ -27,10 +27,15 @@ export class X2tConverter {
   private resourceKey = "";
   private logger?: EditorLogger;
 
-  constructor() {}
+  constructor(
+    private readonly transformStaticResource?: (
+      staticResource: StaticResource,
+    ) => StaticResource,
+  ) {}
 
   private getWorkerStaticResource(): StaticResource {
-    const staticResource = getStaticResource();
+    const staticResource =
+      this.transformStaticResource?.(getStaticResource()) ?? getStaticResource();
     if (typeof window === "undefined") {
       return staticResource;
     }
@@ -278,6 +283,28 @@ export class X2tConverter {
 }
 
 /**
- * @description 默认 x2t 转换器实例。
+ * 9.4 静态 SDK 随附的浏览器 x2t 与 Editor.bin / PDF renderer stream 不兼容。
+ * 统一使用已验证的 9.3.0 成对 x2t.js + x2t.wasm，避免导入和导出分别初始化
+ * 不同 wasm 造成协议不一致。编辑器 UI、字体和 DocsAPI 仍保持 9.4。
  */
-export const converter = new X2tConverter();
+function getCompatibleX2tStaticResource(staticResource: StaticResource) {
+  const compatOnlyOfficeRoot = staticResource.onlyoffice.root.replace(
+    /\/onlyoffice\/[^/]+$/,
+    "/onlyoffice/9.3.0",
+  );
+  const x2tRoot = `${compatOnlyOfficeRoot}/x2t`;
+
+  return {
+    ...staticResource,
+    version: { ...staticResource.version, x2t: x2tRoot },
+    x2t: {
+      ...staticResource.x2t,
+      root: x2tRoot,
+      script: `${x2tRoot}/x2t.js`,
+      wasm: `${x2tRoot}/x2t.wasm`,
+    },
+  };
+}
+
+/** @description 浏览器端 Office 格式转换器。 */
+export const converter = new X2tConverter(getCompatibleX2tStaticResource);

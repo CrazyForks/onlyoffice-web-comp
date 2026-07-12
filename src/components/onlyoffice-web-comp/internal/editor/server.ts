@@ -1654,9 +1654,7 @@ export class EditorServer {
       return input;
     }
 
-    /**
-     * @description downloadAs 等 HTTP 响应时不能调用 asc_nativeGetFile，否则 SDK 会互相等待。
-     */
+    /** @description downloadAs 等 HTTP 响应期间不能调用 asc_nativeGetFile。 */
     const cached = this.fsMap.get("Editor.bin");
     if (cached && isValidEditorBin(cached)) {
       return cached;
@@ -1664,9 +1662,7 @@ export class EditorServer {
     return null;
   }
 
-  /**
-   * @description 将 Editor.bin 和 Web SDK 渲染器 Memory 流组合导出为 PDF。
-   */
+  /** 将 Editor.bin 和 Web SDK 渲染器 Memory 流组合导出为 PDF。 */
   private async convertEditorBinToPdf(
     binData: Uint8Array,
     pdfRendererStream?: Uint8Array,
@@ -1863,7 +1859,9 @@ export class EditorServer {
         liveViewerSupport: true,
         branding: false,
         customization: true,
-        advancedApi: false,
+        // Developer Edition Connector 通过 advancedApi 门控；关闭时编辑器会
+        // 静默忽略 createConnector() 的 postMessage 请求。
+        advancedApi: true,
       },
     });
   }

@@ -85,6 +85,7 @@ window["__custom_font_registry__"] = {
 // 加载器、二进制流或文档排版管线，避免影响 OnlyOffice 自带字体渲染。
 (function (window) {
   "use strict";
+  var registry = window.__custom_font_registry__ || {};
 
   function patchComboBoxFonts() {
     var proto =
@@ -99,6 +100,17 @@ window["__custom_font_registry__"] = {
     if (typeof proto.selectCandidate === "function") {
       var origSelectCandidate = proto.selectCandidate;
       proto.selectCandidate = function (isExact) {
+        // 9.4 会把 imgidx 当 sprite index。自定义字体记录有时将文件偏移
+        // （例如 134400）写到这里，导致 getImage 分配超大 TypedArray。
+        if (this.store && typeof this.store.each === "function") {
+          this.store.each(function (model) {
+            if (!model || typeof model.get !== "function") return;
+            var idx = model.get("imgidx");
+            if (typeof idx !== "number" || !isFinite(idx) || idx < 0 || idx > 512) {
+              model.set("imgidx", 0);
+            }
+          });
+        }
         if (this.store && typeof this.store.toJSON === "function") {
           this._fontsArray = this.store.toJSON();
         }
@@ -129,7 +141,6 @@ window["__custom_font_registry__"] = {
     if (typeof original !== "function") {
       return false;
     }
-    var registry = window.__custom_font_registry__ || {};
     var names = {};
     for (var id in registry) {
       if (!Object.prototype.hasOwnProperty.call(registry, id)) {
@@ -182,11 +193,219 @@ window["__custom_font_registry__"] = {
     return true;
   }
 
+  // Cell / Slide 的 9.4 picker 不会从追加的 __fonts_infos 建立名称索引，
+  // 因而会为自定义名返回 Arial（文件 022）。只克隆返回的文件描述并替换
+  // 文件 id，不触碰原生 catalog、内置字体或布局管线。
+  function patchRuntimeFontPicker() {
+    var asc = window.AscFonts;
+    if (!asc || typeof asc.pickFont !== "function" || asc.__CUSTOM_PICK_FONT_PATCHED__) {
+      return false;
+    }
+
+    var original = asc.pickFont.bind(asc);
+    asc.pickFont = function (name) {
+      var file = original.apply(this, arguments);
+      var customId = null;
+      for (var id in registry) {
+        if (!Object.prototype.hasOwnProperty.call(registry, id)) continue;
+        var aliases = Array.isArray(registry[id])
+          ? registry[id]
+          : registry[id] && registry[id].aliases
+            ? registry[id].aliases
+            : [];
+        if (aliases.indexOf(name) >= 0) {
+          customId = id;
+          break;
+        }
+      }
+      if (!customId || !file) return file;
+
+      var result = Object.create(Object.getPrototypeOf(file));
+      for (var key in file) result[key] = file[key];
+      if ("Xa" in result) result.Xa = customId;
+      if ("Na" in result) result.Na = customId;
+      return result;
+    };
+    asc.__CUSTOM_PICK_FONT_PATCHED__ = true;
+    return true;
+  }
+
+  // Cell / Slide 的异步字体加载器不使用 AscFonts.pickFont，而是直接调用
+  // AscFonts.JZ.rM(name)。9.4 在启动时已把 custom file 加进 hOc/y1b，但
+  // JZ 的名称索引早于该步骤构建，未知字体会在这里回退 Arial，因而从不请求
+  // fonts/{customId}。克隆 Arial 的 family 描述，仅把四种样式指到 custom
+  // file；内置字体仍由原始 rM 完整处理。
+  function patchCellSlideFontResolver() {
+    var asc = window.AscFonts;
+    var resolver = asc && asc.JZ;
+    if (!asc || !resolver || !asc.hOc || typeof resolver.rM !== "function") {
+      return false;
+    }
+    if (resolver.__CUSTOM_FONT_REGISTRY_RESOLVER_PATCHED__) {
+      return true;
+    }
+
+    var fileIndexes = {};
+    for (var index = 0; index < asc.hOc.length; index++) {
+      var file = asc.hOc[index];
+      var fileId = file && (file.Xa || file.Na);
+      if (fileId && Object.prototype.hasOwnProperty.call(registry, fileId)) {
+        fileIndexes[fileId] = index;
+      }
+    }
+    for (var id in registry) {
+      if (!Object.prototype.hasOwnProperty.call(registry, id) || fileIndexes[id] === undefined) {
+        return false;
+      }
+    }
+
+    var aliasesToId = {};
+    for (var customId in registry) {
+      if (!Object.prototype.hasOwnProperty.call(registry, customId)) continue;
+      var aliases = Array.isArray(registry[customId])
+        ? registry[customId]
+        : registry[customId] && registry[customId].aliases
+          ? registry[customId].aliases
+          : [];
+      for (var aliasIndex = 0; aliasIndex < aliases.length; aliasIndex++) {
+        aliasesToId[aliases[aliasIndex]] = customId;
+      }
+    }
+
+    // Cell 的画布排版会直接调用 xMd(name)，并基于其 Rma 再查询
+    // y1b[z1b[Rma]]；只 hook rM 无法覆盖这条文档加载后的重绘路径。
+    // 保留 Arial 的 matcher 信息，但让 custom 名进入已存在的 y1b catalog。
+    var originalResolveName = resolver.xMd.bind(resolver);
+    resolver.xMd = function (name) {
+      var customId = aliasesToId[name];
+      if (!customId) {
+        return originalResolveName.apply(this, arguments);
+      }
+      var fallback = originalResolveName("Arial");
+      if (!fallback) {
+        return originalResolveName.apply(this, arguments);
+      }
+      var resolved = Object.create(Object.getPrototypeOf(fallback));
+      for (var key in fallback) resolved[key] = fallback[key];
+      resolved.aP = name;
+      resolved.Rma = name;
+      return resolved;
+    };
+
+    var original = resolver.rM.bind(resolver);
+    resolver.rM = function (name) {
+      var customId = aliasesToId[name];
+      if (!customId) {
+        return original.apply(this, arguments);
+      }
+      var fallback = original("Arial");
+      if (!fallback) {
+        return original.apply(this, arguments);
+      }
+      var resolved = Object.create(Object.getPrototypeOf(fallback));
+      for (var key in fallback) resolved[key] = fallback[key];
+      var fileIndex = fileIndexes[customId];
+      resolved.Fa = name;
+      resolved.vja = fileIndex;
+      resolved.tua = fileIndex;
+      resolved.WE = fileIndex;
+      resolved.sua = fileIndex;
+      return resolved;
+    };
+    resolver.__CUSTOM_FONT_REGISTRY_RESOLVER_PATCHED__ = true;
+    return true;
+  }
+
+  // Slide 的 LU.gLc(name) 会把未知文档字体名规范化为 Arial。虽然 custom
+  // family 已由 AllFonts 构建进 $Jb/r3b，但若只在 FG 返回时克隆 Arial，
+  // 排版缓存仍会沿用 fallback。直接让 gLc 返回原生 custom family。
+  function patchSlideFontResolver() {
+    var asc = window.AscFonts;
+    var resolver = asc && asc.LU;
+    if (!asc || !resolver || !asc.Stc || typeof resolver.FG !== "function") {
+      return false;
+    }
+    if (resolver.__CUSTOM_FONT_REGISTRY_RESOLVER_PATCHED__) {
+      return true;
+    }
+
+    var fileIndexes = {};
+    for (var index = 0; index < asc.Stc.length; index++) {
+      var file = asc.Stc[index];
+      var fileId = file && (file.Na || file.Xa);
+      if (fileId && Object.prototype.hasOwnProperty.call(registry, fileId)) {
+        fileIndexes[fileId] = index;
+      }
+    }
+    for (var id in registry) {
+      if (!Object.prototype.hasOwnProperty.call(registry, id) || fileIndexes[id] === undefined) {
+        return false;
+      }
+    }
+
+    var aliasesToId = {};
+    for (var customId in registry) {
+      if (!Object.prototype.hasOwnProperty.call(registry, customId)) continue;
+      var aliases = Array.isArray(registry[customId])
+        ? registry[customId]
+        : registry[customId] && registry[customId].aliases
+          ? registry[customId].aliases
+          : [];
+      for (var aliasIndex = 0; aliasIndex < aliases.length; aliasIndex++) {
+        aliasesToId[aliases[aliasIndex]] = customId;
+      }
+    }
+
+    var original = resolver.gLc && resolver.gLc.bind(resolver);
+    if (typeof original !== "function" || !asc.$Jb || !asc.r3b) {
+      return false;
+    }
+    resolver.gLc = function (name) {
+      var customId = aliasesToId[name];
+      if (!customId) {
+        return original.apply(this, arguments);
+      }
+      if (asc.$Jb[name] === undefined || !asc.r3b[asc.$Jb[name]]) {
+        return original.apply(this, arguments);
+      }
+      return { TL: name, fba: name };
+    };
+    resolver.__CUSTOM_FONT_REGISTRY_RESOLVER_PATCHED__ = true;
+    return true;
+  }
+
+  // AllFonts 早于 Slide SDK 加载。仅靠 50ms 轮询可能在首次 TJb 文档字体
+  // 收集之后才包住 LU.FG；监听 LU 赋值并在同一同步调用栈中安装 resolver。
+  function watchSlideFontResolver() {
+    var asc = (window.AscFonts = window.AscFonts || {});
+    if (asc.__CUSTOM_FONT_REGISTRY_LU_WATCHED__) {
+      return true;
+    }
+    var current = asc.LU;
+    asc.__CUSTOM_FONT_REGISTRY_LU_WATCHED__ = true;
+    Object.defineProperty(asc, "LU", {
+      configurable: true,
+      enumerable: true,
+      get: function () {
+        return current;
+      },
+      set: function (value) {
+        current = value;
+        patchSlideFontResolver();
+      },
+    });
+    return true;
+  }
+
+  watchSlideFontResolver();
   var tries = 0;
   var timer = window.setInterval(function () {
     var comboPatched = patchComboBoxFonts();
     var pickerPatched = patchNativeFontPicker();
-    if ((comboPatched && pickerPatched) || ++tries > 1200) {
+    var runtimePickerPatched = patchRuntimeFontPicker();
+    watchSlideFontResolver();
+    var resolverPatched = patchCellSlideFontResolver() || patchSlideFontResolver();
+    if ((comboPatched && pickerPatched && runtimePickerPatched && resolverPatched) || ++tries > 1200) {
       window.clearInterval(timer);
     }
   }, 50);
@@ -210,8 +429,8 @@ window["__custom_font_registry__"] = {
 (function (window) {
   "use strict";
 
-  // 这部分是 9.3 内部符号的历史实现。9.4 已改用 XDc / Vbb，继续运行会
-  // 改写不兼容的全局加载器并破坏原生字体渲染；保留源码供旧版比对，但不执行。
+  // 这份旧实现会改写 9.4 Cell catalog，不能执行；PPT 现由上面的 LU 同步
+  // watcher 处理，因此此处仅保留作符号比对。
   return;
 
   var XOR_KEY = [
@@ -929,6 +1148,10 @@ window["__custom_font_registry__"] = {
     });
   }
 
+  // 首段 registry 补丁与本段完整编辑器补丁处于不同 IIFE 作用域；暴露一个
+  // 极小入口，供前者在字体输入/复制前安全清理缩略图索引。
+  window.__sanitizeCustomFontComboStore = sanitizeFontComboStore;
+
   function sanitizeFontListThumbnails(fonts, registry) {
     if (!fonts || !fonts.length) {
       return;
@@ -1016,6 +1239,50 @@ window["__custom_font_registry__"] = {
     patched = hookFontObjectThumbnailProto(asc.nbb, "qAg") || patched;
     patched = hookFontObjectThumbnailProto(asc.aKa, "zPg") || patched;
     return patched;
+  }
+
+  /**
+   * Cell / Slide 9.4 使用 AscFonts.pickFont() 返回实际字体文件描述。它们的
+   * 内置 catalog 不会从后加的 __fonts_infos 自动生成名称索引，未知自定义名会
+   * 被解析为 Arial（文件 022）。保留原对象原型，仅将文件 id 改为 registry id，
+   * 让原生加载器继续按 fonts/{id} 拉取并缓存字形。
+   */
+  function hookRuntimeCustomFontPicker() {
+    var asc = window.AscFonts;
+    if (!asc || typeof asc.pickFont !== "function" || asc.__CUSTOM_PICK_FONT_PATCHED__) {
+      return false;
+    }
+
+    var original = asc.pickFont.bind(asc);
+    asc.pickFont = function (name) {
+      var file = original.apply(this, arguments);
+      var registry = loadCustomFontRegistry();
+      var id = null;
+      for (var key in registry) {
+        if (!Object.prototype.hasOwnProperty.call(registry, key)) {
+          continue;
+        }
+        var names = listFontNames(registry[key]);
+        if (names.indexOf(name) >= 0) {
+          id = key;
+          break;
+        }
+      }
+      if (!id || !file) {
+        return file;
+      }
+
+      var resolved = Object.create(Object.getPrototypeOf(file));
+      for (var prop in file) {
+        resolved[prop] = file[prop];
+      }
+      // Cell uses Xa; Slide uses Na. Keep both variants for minor SDK builds.
+      if ("Xa" in resolved) resolved.Xa = id;
+      if ("Na" in resolved) resolved.Na = id;
+      return resolved;
+    };
+    asc.__CUSTOM_PICK_FONT_PATCHED__ = true;
+    return true;
   }
 
   function patchEditorFontListMethod(editor, methodName) {
@@ -1209,7 +1476,9 @@ window["__custom_font_registry__"] = {
   // catalog/缩略图补丁生效后，强制刷新 toolbar 字体列表（修复 ock/Igj 早于 hook 的 imgidx）。
   function reloadEditorFontListForToolbar() {
     hookFontObjectThumbnails();
+    hookRuntimeCustomFontPicker();
     hookFontListInit();
+    hookRuntimeCustomFontPicker();
     hookEditorFontEventEmit();
     hookWebAppsFontsLoad();
     hookComboBoxFontsWebApps();
@@ -2822,46 +3091,32 @@ window["__custom_font_registry__"] = {
     }, 50);
   }
 
+  // Cell / Slide 会在 AllFonts 之后替换 AscFonts；主安装轮询可能已结束，
+  // 因此单独等待最终运行时的 pickFont 再挂接自定义文件 id 映射。
+  function waitForRuntimeCustomFontPicker() {
+    var tries = 0;
+    var timer = window.setInterval(function () {
+      if (hookRuntimeCustomFontPicker() || ++tries > 1200) {
+        window.clearInterval(timer);
+      }
+    }, 50);
+  }
+
   // hookSlideFontManagerInit 必须最先注册（AllFonts 早于 slide sdk 加载）。
   function pollUntilReady() {
     hookSlideFontManagerInit();
-    hookCellFontCatalogInit();
     hookSlideFontCatalogInit();
-    hookWordEngineInit();
-    hookCellEngineInit();
-    hookCellDocumentFontLoading();
-    hookCellEditorInit();
-    hookInitNativeEditors();
-    hookCellDocumentFontRegistration();
-    hookCellExcelFontBe();
     hookSlideDocumentFontLoading();
-    hookEditorForFontList();
-    hookFontListInit();
-    hookWebAppsFontsLoad();
-    hookComboBoxFontsWebApps();
-    if (tryInstallAll()) {
+    hookSlideFontPickerGl();
+    if (tryInstallSlide()) {
       return;
     }
     var timer = window.setInterval(function () {
       hookSlideFontManagerInit();
-      hookCellFontCatalogInit();
       hookSlideFontCatalogInit();
-      hookWordEngineInit();
-      hookCellEngineInit();
-      hookCellDocumentFontLoading();
-      hookCellEditorInit();
-      hookInitNativeEditors();
-      hookCellDocumentFontRegistration();
-      hookCellExcelFontBe();
       hookSlideDocumentFontLoading();
-      hookEditorForFontList();
-      hookFontListInit();
-      hookWebAppsFontsLoad();
-      hookComboBoxFontsWebApps();
-      tryInstallWord();
-      tryInstallCell();
-      tryInstallSlide();
-      if (isFontPatchingComplete()) {
+      hookSlideFontPickerGl();
+      if (tryInstallSlide()) {
         window.clearInterval(timer);
       }
     }, 50);
@@ -2992,6 +3247,5 @@ window["__custom_font_registry__"] = {
     };
   };
 
-  waitForWebAppsComboFontHook();
   pollUntilReady();
 })(window);

@@ -25,5 +25,10 @@ export type {
 
 export type * from "./type/word-api";
 export type * from "./type/sdk-internal";
-export type { OfficeTheme, User } from "./internal/editor/types";
+export type {
+  OfficeTheme,
+  OnlyOfficeConnector,
+  OnlyOfficeConnectorOptions,
+  User,
+} from "./internal/editor/types";
 export type { OfficeThemeId } from "./const";

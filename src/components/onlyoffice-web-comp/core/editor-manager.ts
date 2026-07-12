@@ -28,6 +28,8 @@ import {
   isOfficeXmlSizeLimitExceededError,
   type OfficeXmlSizeLimitExceededPayload,
   type OfficeTheme,
+  type OnlyOfficeConnector,
+  type OnlyOfficeConnectorOptions,
   type User,
 } from "../internal/editor/types";
 import { getDocumentType, isOnlyOfficeCdnMode } from "../const";
@@ -90,15 +92,8 @@ export type CreateEditorViewOptions = {
   officeXmlEvent?: OfficeXmlEventConfig;
 };
 
-let instanceIndex = 0;
-
 function getFileType(fileName: string, fileType?: string) {
   return fileType || fileName.split(".").pop()?.toLowerCase() || "docx";
-}
-
-function getNewInstanceId() {
-  instanceIndex += 1;
-  return `onlyoffice-${instanceIndex}`;
 }
 
 type OnlyOfficeSdkApi = {
@@ -166,12 +161,19 @@ type WordHeaderView = {
 
 export class EditorManager {
   private editor: DocEditor | null = null;
+  /**
+   * Connector 和 logger 一样属于一个 EditorManager（也就是一个编辑器 iframe）。
+   * 9.4 的 DocsAPI 每创建一个 Connector 都会注册一组 postMessage 监听器；
+   * 因此不能由业务调用方重复创建。
+   */
+  private connector: OnlyOfficeConnector | null = null;
   private server: EditorServer;
   private dirty = false;
   private readOnly = false;
   private editorLang: OnlyOfficeLang = getOnlyOfficeLang();
   private uiTheme: OfficeTheme = "theme-white";
-  private instanceId = getNewInstanceId();
+  /** 与容器一一对应，供事件与 Connector 使用同一稳定路由键。 */
+  private instanceId: string;
   private containerId: string;
   private logger: EditorLogger;
   private fileName = "New Document.docx";
@@ -195,6 +197,7 @@ export class EditorManager {
 
   constructor(containerId = ONLYOFFICE_ID) {
     this.containerId = containerId;
+    this.instanceId = containerId;
     this.logger = new EditorLogger(containerId);
     this.server = new EditorServer({
       getState: () => ({ readOnly: this.readOnly }),
@@ -1299,11 +1302,75 @@ export class EditorManager {
   }
 
   private destroyDocEditorInstance() {
+    this.disconnectConnector();
     this.editor?.destroyEditor?.();
     this.editor = null;
     this.comments.clear();
     this.revisions = [];
     this.teardownWordContentSync();
+  }
+
+  /**
+   * 创建 Developer Edition Connector。
+   * Connector 运行在父页面，借助 DocsAPI 与编辑器 iframe 通信，因此可用于 CDN 跨域场景。
+   */
+  createConnector(options?: OnlyOfficeConnectorOptions): OnlyOfficeConnector {
+    if (!this.editor) {
+      throw new Error("OnlyOffice editor is not ready");
+    }
+
+    // 同一编辑器始终复用同一个 Connector。调用方可以在不再使用时主动
+    // disconnect；下一次默认创建请求会重新 connect，而不会注册第二套监听器。
+    if (this.connector) {
+      if (options?.autoconnect !== false && !this.connector.isConnected) {
+        this.connector.connect();
+      }
+      return this.connector;
+    }
+
+    const iframe = this.getEditorFrameElement();
+    if (!iframe?.contentWindow) {
+      throw new Error("OnlyOffice editor iframe is not ready");
+    }
+
+    // 9.4 的 DocsAPI 把 Connector 消息固定发送给 `iframeEditor`，但本组件
+    // 以 containerId 生成 frameEditorId。先禁止自动连接，替换发送函数后再 connect。
+    const connector = this.editor.createConnector({
+      ...options,
+      autoconnect: false,
+    }) as OnlyOfficeConnector & {
+      guid?: string;
+      sendMessage?: (data: Record<string, unknown>) => void;
+    };
+    // DocsAPI 将 guid 仅作为 connector 回调的路由键。一个 EditorManager
+    // 只维护一个 connector，因此用 containerId 可稳定地与编辑器一一对应。
+    connector.guid = this.containerId;
+    const iframeUrl = new URL(iframe.src, window.location.href);
+    const frameEditorId =
+      iframeUrl.searchParams.get("frameEditorId") ?? "iframeEditor";
+    connector.sendMessage = (data) => {
+      iframe.contentWindow?.postMessage(
+        JSON.stringify({
+          frameEditorId,
+          type: "onExternalPluginMessage",
+          subType: "connector",
+          data: { ...data, guid: connector.guid },
+        }),
+        iframeUrl.origin,
+      );
+    };
+    if (options?.autoconnect !== false) {
+      connector.connect();
+    }
+    this.connector = connector;
+    return this.connector;
+  }
+
+  private disconnectConnector() {
+    if (this.connector?.isConnected) {
+      this.connector.disconnect();
+    }
+    this.connector = null;
   }
 
   /**
@@ -2413,6 +2480,7 @@ export class EditorManager {
     this.clearOfficeXmlSizeLimitOverlay();
     unregisterScopedIo(this.containerId);
     unregisterCrossOriginBridge(this.containerId);
+    this.disconnectConnector();
     this.editor?.destroyEditor?.();
     this.editor = null;
     this.dirty = false;
