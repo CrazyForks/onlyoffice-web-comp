@@ -27,7 +27,7 @@
 2. 复制 [`public/packages/onlyoffice/`](public/packages/onlyoffice/) 静态资源到你的项目 `public/packages/onlyoffice/` 目录。
 3. 参考 [`src/features/demo/office-preview-page.tsx`](src/features/demo/office-preview-page.tsx) 构造自己的界面：准备编辑器容器，维护一个 `OnlyOfficeManager` 实例，按需调用 `openDocument`、`downloadExport`、`toggleReadOnly`，并在页面卸载时销毁 manager。
 
-静态资源读取统一在 [`src/components/onlyoffice-web-comp/const/index.ts`](src/components/onlyoffice-web-comp/const/index.ts) 配置。默认读取 `/packages/onlyoffice/9.3.0`；如果你要切换到 CDN，修改 `buildStaticResource` 中使用的 `cdnOrigin` 即可。
+静态资源读取统一在 [`src/components/onlyoffice-web-comp/const/index.ts`](src/components/onlyoffice-web-comp/const/index.ts) 配置。本地与 CDN 模式默认均读取 Developer Edition Docker 导出的 9.4 SDK：`/packages/onlyoffice/9.4.0-develop`；如 CDN 目录不同，可通过 `onlyofficeVersion` 覆盖。
 
 ## 核心优势
 
@@ -142,7 +142,7 @@ npx wrangler pages deploy public/packages \
 部署后资源地址应该类似：
 
 ```text
-https://<project>.pages.dev/onlyoffice/9.3.0/web-apps/apps/api/documents/api.js
+https://<project>.pages.dev/onlyoffice/9.4.0-develop/web-apps/apps/api/documents/api.js
 ```
 
 在运行时把 Pages origin 注册为静态资源根地址：

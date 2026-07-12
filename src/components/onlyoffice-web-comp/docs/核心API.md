@@ -80,6 +80,8 @@ OnlyOfficeManager.resetStaticResource();
 type OnlyOfficeStaticResourceOptions = {
   /** CDN packages 根地址，例如 https://770e15f8.onlyoffice-packages.pages.dev */
   cdnOrigin?: string | null;
+  /** CDN 的 SDK 版本；默认当前 9.4 SDK */
+  onlyofficeVersion?: string | null;
 };
 ```
 

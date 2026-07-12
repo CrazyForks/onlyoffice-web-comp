@@ -900,8 +900,8 @@ export class EditorServer {
     name: "Me",
   };
   private client = {
-    buildVersion: "9.3.0",
-    buildNumber: 8,
+    buildVersion: "9.4.0",
+    buildNumber: 129,
   };
   private participants: Participant[] = [];
   private syncChangesIndex = 0;
@@ -1981,7 +1981,7 @@ export class EditorServer {
           participants: participants,
           locks: [],
           indexUser: 1,
-          buildVersion: client.buildVersion || "9.3.0",
+          buildVersion: client.buildVersion || "9.4.0",
           buildNumber: client.buildNumber || 9,
           licenseType: 3,
           editorType: 2,

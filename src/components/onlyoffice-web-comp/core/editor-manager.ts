@@ -371,9 +371,9 @@ export class EditorManager {
   }
 
   private installProxiesOnWindow(win: OnlyOfficeProxyWindow) {
-    installOnlyOfficeProxies(win, this.server, this.createScopedIo(), {
-      installIo: false,
-    });
+    // 9.4 的协作客户端会把 socket.io 请求相对解析到静态 SDK 根目录。
+    // 必须替换 iframe 内的 io，才能将 /doc/... 连接交给内存 EditorServer。
+    installOnlyOfficeProxies(win, this.server, this.createScopedIo());
   }
 
   /**

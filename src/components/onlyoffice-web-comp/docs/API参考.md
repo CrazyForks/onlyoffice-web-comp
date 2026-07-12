@@ -65,7 +65,7 @@ OnlyOffice SDK 与 x2t 静态资源路径总入口。
 ```typescript
 import { STATIC_RESOURCE } from "@/components/onlyoffice-web-comp";
 
-STATIC_RESOURCE.onlyoffice.root     // 默认 /packages/onlyoffice/9.3.0
+STATIC_RESOURCE.onlyoffice.root     // 默认 /packages/onlyoffice/9.4.0-develop
 STATIC_RESOURCE.onlyoffice.apiUrl     // api.js 绝对 URL
 STATIC_RESOURCE.x2t.script            // x2t.js 路径
 STATIC_RESOURCE.x2t.wasm              // x2t.wasm 路径
@@ -75,7 +75,7 @@ STATIC_RESOURCE.x2t.wasm              // x2t.wasm 路径
 
 ### `__custom_font_registry__`
 
-SDK 侧字体注册表，定义于 `public/packages/onlyoffice/9.3.0/sdkjs/common/AllFonts.js`。键为 catalog 文件 id（如 `"1001"`），值为文档内字体别名数组。完整配置流程见 [字体配置](./字体配置.md)。
+SDK 侧字体注册表，定义于 `public/packages/onlyoffice/9.4.0-develop/sdkjs/common/AllFonts.js`。键为 catalog 文件 id（如 `"1001"`），值为文档内字体别名数组。完整配置流程见 [字体配置](./字体配置.md)。
 
 ## 类型定义
 

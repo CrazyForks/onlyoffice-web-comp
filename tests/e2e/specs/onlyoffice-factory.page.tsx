@@ -7,6 +7,7 @@ import {
   ONLYOFFICE_CONTAINER_CONFIG,
   ONLYOFFICE_EVENT_KEYS,
   OFFICE_THEME,
+  STATIC_RESOURCE,
   OnlyOfficeManager,
   editorManagerFactory,
   isOnlyOfficeCdnMode,
@@ -192,6 +193,14 @@ export async function runScenario(
     }
 
     assert(isOnlyOfficeCdnMode() === (mode === "cdn"), "CDN mode mismatch");
+    const expectedRoot =
+      mode === "cdn"
+        ? `${cdnOrigin}/onlyoffice/9.4.0-develop`
+        : "/packages/onlyoffice/9.4.0-develop";
+    assert(
+      STATIC_RESOURCE.onlyoffice.root === expectedRoot,
+      `Unexpected SDK root: ${STATIC_RESOURCE.onlyoffice.root}`,
+    );
     return mode === "cdn" ? cdnOrigin : "local packages";
   });
 

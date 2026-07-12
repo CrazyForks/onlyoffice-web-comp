@@ -40,7 +40,7 @@ export default defineConfig({
     },
     {
       command: `node scripts/static-server.mjs public/packages --port ${cdnPort} --host ${host}`,
-      url: `http://${host}:${cdnPort}/onlyoffice/9.3.0/web-apps/apps/api/documents/api.js`,
+      url: `http://${host}:${cdnPort}/onlyoffice/9.4.0-develop/web-apps/apps/api/documents/api.js`,
       reuseExistingServer: !isCI,
       timeout: 120_000,
     },

@@ -1,10 +1,10 @@
 /**
  * OnlyOffice 编辑器 iframe / Reporter popup 的运行时扩展类型。
  *
- * 对照 SDK 源码：public/packages/onlyoffice/9.3.0/sdkjs/.../sdk-all-min.js
+ * 对照 SDK 源码：public/packages/onlyoffice/9.4.0-develop/sdkjs/.../sdk-all-min.js
  * 接入层在 iframe 内挂载的 __ONLYOFFICE_* 标记也在此集中声明，升级 SDK 时优先核对此文件。
  *
- * 关键静态路径（默认根目录 /packages/onlyoffice/9.3.0）：
+ * 关键静态路径（默认根目录 /packages/onlyoffice/9.4.0-develop）：
  * - 主编辑器 iframe：web-apps/apps/{documenteditor|spreadsheeteditor|presentationeditor}/main/index.html
  * - PPT 演示者视图 popup：web-apps/apps/presentationeditor/main/index.reporter.html
  * - 协作 Mock 注入：core/editor-manager.ts → installIframeProxies() /
