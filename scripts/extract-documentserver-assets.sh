@@ -180,13 +180,14 @@ install_paste_html_sanitizer() {
     file="${OUT_DIR}/sdkjs/${editor}/sdk-all.js"
     [[ -f "$file" ]] || die "缺少粘贴 SDK: ${file}"
 
-    if rg -q '__ONLYOFFICE_SANITIZE_PASTE_HTML__' "$file"; then
-      continue
-    fi
-    rg -q 'u\.document\.write\([hp]\)' "$file" \
-      || die "未找到 ${editor} 的 9.4 粘贴 iframe 写入点"
+    if ! rg -q '__ONLYOFFICE_SANITIZE_PASTE_HTML__' "$file"; then
+      rg -q 'u\.document\.write\([hp]\)' "$file" \
+        || die "未找到 ${editor} 的 9.4 粘贴 iframe 写入点"
 
-    perl -0pi -e 's#u\.document\.write\(([hp])\)#u.document.write(a.__ONLYOFFICE_SANITIZE_PASTE_HTML__ ? a.__ONLYOFFICE_SANITIZE_PASTE_HTML__($1) : $1.replace(/<script[^>]*>[^]*?<[/]script>/gi, "").replace(/<script[^>]*>/gi, "").replace(/[ ]on[a-z]+=[^ >]*/gi, ""))#' "$file"
+      perl -0pi -e 's#u\.document\.write\(([hp])\)#u.document.write(a.__ONLYOFFICE_SANITIZE_PASTE_HTML__ ? a.__ONLYOFFICE_SANITIZE_PASTE_HTML__($1) : $1.replace(/<script[^>]*>[^]*?<[/]script>/gi, "").replace(/<script[^>]*>/gi, "").replace(/[ ]on[a-z]+=[^ >]*/gi, ""))#' "$file"
+    fi
+
+    perl -0pi -e 's#setAttribute\("sandbox","allow-same-origin"\)#setAttribute("sandbox","allow-same-origin allow-scripts")#' "$file"
   done
 }
 
