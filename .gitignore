@@ -23,6 +23,7 @@ node_modules
 
 # production
 /build
+/.cloudflare-pages/
 
 # misc
 .DS_Store
