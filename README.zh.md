@@ -25,7 +25,7 @@
 
 1. 复制 [`src/components/onlyoffice-web-comp/`](src/components/onlyoffice-web-comp/) 到你的项目源码目录。
 2. 复制 [`public/packages/onlyoffice/`](public/packages/onlyoffice/) 静态资源到你的项目 `public/packages/onlyoffice/` 目录。
-3. 参考 [`src/features/demo/office-preview-page.tsx`](src/features/demo/office-preview-page.tsx) 构造自己的界面：准备编辑器容器，维护一个 `OnlyOfficeManager` 实例，按需调用 `openDocument`、`downloadExport`、`toggleReadOnly`，并在页面卸载时销毁 manager。
+3. 参考 [`src/features/demo/office-preview-page.tsx`](src/features/demo/office-preview-page.tsx) 构造自己的界面：准备编辑器容器，维护一个 `OnlyOfficeManager` 实例，按需调用 `openDocument`、`downloadExport`、`toggleReadOnly`，并在页面卸载时销毁 manager。需要从父页面调用编辑器 Automation API 时，可通过 `createConnector()` 获取 Developer Edition Connector。
 
 静态资源读取统一在 [`src/components/onlyoffice-web-comp/const/index.ts`](src/components/onlyoffice-web-comp/const/index.ts) 配置。本地与 CDN 模式默认均读取 Developer Edition Docker 导出的 9.4 SDK：`/packages/onlyoffice/9.4.0-develop`；如 CDN 目录不同，可通过 `onlyofficeVersion` 覆盖。
 
@@ -35,6 +35,7 @@
 - **格式兼容**：Word、Excel、PowerPoint、CSV、DOCM 等
 - **零后端**：托管静态 SDK 即可使用
 - **工程化 API**：只读/编辑、主题/语言、多实例容器隔离
+- **连接器支持**：通过 Developer Edition Connector 从父页面调用编辑器 Automation API，本地和 CDN 模式均可用
 
 ## 快速体验
 

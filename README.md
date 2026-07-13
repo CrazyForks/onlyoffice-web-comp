@@ -25,7 +25,7 @@ The practical integration path is:
 
 1. Copy [`src/components/onlyoffice-web-comp/`](src/components/onlyoffice-web-comp/) into your application source tree.
 2. Copy the static assets from [`public/packages/onlyoffice/`](public/packages/onlyoffice/) into your app's `public/packages/onlyoffice/` directory.
-3. Build your UI by following [`src/features/demo/office-preview-page.tsx`](src/features/demo/office-preview-page.tsx): create an editor container, keep an `OnlyOfficeManager` instance, call `openDocument`, `downloadExport`, `toggleReadOnly`, and destroy the manager on unmount.
+3. Build your UI by following [`src/features/demo/office-preview-page.tsx`](src/features/demo/office-preview-page.tsx): create an editor container, keep an `OnlyOfficeManager` instance, call `openDocument`, `downloadExport`, `toggleReadOnly`, and destroy the manager on unmount. To call the editor Automation API from the parent page, get a Developer Edition Connector with `createConnector()`.
 
 Static resource resolution is centralized in [`src/components/onlyoffice-web-comp/const/index.ts`](src/components/onlyoffice-web-comp/const/index.ts). Both local and CDN modes use the Developer Edition Docker-exported 9.4 SDK at `/packages/onlyoffice/9.4.0-develop` by default; `onlyofficeVersion` can override the CDN directory when needed.
 
@@ -35,6 +35,7 @@ Static resource resolution is centralized in [`src/components/onlyoffice-web-com
 - **Format support**: Word, Excel, PowerPoint, CSV, DOCM, and more
 - **No backend**: Host static SDK assets only
 - **Engineering APIs**: Read-only/edit toggle, theme, language, multi-instance isolation
+- **Connector support**: Call the editor Automation API from the parent page with the Developer Edition Connector; works in both local and cross-origin CDN modes
 
 ## Quick Try
 
