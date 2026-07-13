@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ONLYOFFICE Documents</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=9"/>
+    <meta name="description" content="" />
+    <meta name="keywords" content="" />
+    <style type="text/css"></style>
+</head>
+<body>
+    <script>
+/*
+ * Copyright (C) Ascensio System SIA, 2009-2026
+ *
+ * This program is a free software product. You can redistribute it and/or
+ * modify it under the terms of the GNU Affero General Public License (AGPL)
+ * version 3 as published by the Free Software Foundation, together with the
+ * additional terms provided in the LICENSE file.
+ *
+ * This program is distributed WITHOUT ANY WARRANTY; without even the implied
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. For
+ * details, see the GNU AGPL at: https://www.gnu.org/licenses/agpl-3.0.html
+ *
+ * You can contact Ascensio System SIA by email at info@onlyoffice.com
+ * or by postal mail at 20A-6 Ernesta Birznieka-Upisha Street, Riga,
+ * LV-1050, Latvia, European Union.
+ *
+ * The interactive user interfaces in modified versions of the Program
+ * are required to display Appropriate Legal Notices in accordance with
+ * Section 5 of the GNU AGPL version 3.
+ *
+ * No trademark rights are granted under this License.
+ *
+ * All non-code elements of the Product, including illustrations,
+ * icon sets, and technical writing content, are licensed under the
+ * Creative Commons Attribution-ShareAlike 4.0 International License:
+ * https://creativecommons.org/licenses/by-sa/4.0/legalcode
+ *
+ * This license applies only to such non-code elements and does not
+ * modify or replace the licensing terms applicable to the Program's
+ * source code, which remains licensed under the GNU Affero General
+ * Public License v3.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+void 0;
+
+</script>
+
+    <link rel="preload" as="script" href="../../../vendor/requirejs/require.js"/>
+    <script type="text/javascript" src="../../../vendor/jquery/jquery.min.js"></script>
+    <script type="text/javascript" src="../../../vendor/socketio/socket.io.min.js"></script>
+    <script type="text/javascript" src="../../../vendor/xregexp/xregexp-all-min.js"></script>
+    <script type="text/javascript" src="../../../../sdkjs/common/AllFonts.js"></script>
+    <script type="text/javascript" src="../../../../sdkjs/word/sdk-all-min.js"></script>
+    <script type="text/javascript" src="../../../../sdkjs/word/sdk-all.js"></script>
+    <link rel="preload" as="script" href="../../../../sdkjs/cell/sdk-all-min.js"/>
+    <link rel="preload" as="script" href="../../../../sdkjs/cell/sdk-all.js"/>
+    <link rel="preload" as="style" href="../../../../sdkjs/cell/css/main.css"/>
+    <link rel="preload" as="script" href="../../../../sdkjs/slide/sdk-all-min.js"/>
+    <link rel="preload" as="script" href="../../../../sdkjs/slide/sdk-all.js"/>
+    <link rel="preload" as="script" href="../../../apps/documenteditor/main/app.js"/>
+    <link rel="preload" as="style" href="../../../apps/documenteditor/main/resources/css/app.css"/>
+    <link rel="preload" as="script" href="../../../apps/spreadsheeteditor/main/app.js"/>
+    <link rel="preload" as="style" href="../../../apps/spreadsheeteditor/main/resources/css/app.css"/>
+    <link rel="preload" as="script" href="../../../apps/presentationeditor/main/app.js"/>
+    <link rel="preload" as="style" href="../../../apps/presentationeditor/main/resources/css/app.css"/>
+    <div id="editor_sdk"></div>
+    <script type="text/javascript">
+        window['AscNotLoadAllScript'] = true;
+        var editor = new Asc.asc_docs_api({
+            'id-view'  : 'editor_sdk'
+        });
+        editor.asc_loadFontsFromServer();
+    </script>
+</body>
+</html>

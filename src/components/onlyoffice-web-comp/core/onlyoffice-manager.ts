@@ -16,7 +16,11 @@ import {
   type OfficeXmlEventConfig,
   type OnlyOfficeStaticResourceOptions,
 } from "../const";
-import type { OfficeTheme } from "../internal/editor/types";
+import type {
+  OfficeTheme,
+  OnlyOfficeConnector,
+  OnlyOfficeConnectorOptions,
+} from "../internal/editor/types";
 import {
   clearDocumentObj,
   getDocumentObj,
@@ -274,6 +278,14 @@ export class OnlyOfficeManager {
 
   getEditor() {
     return this.editor;
+  }
+
+  /** 创建 OnlyOffice Developer Edition Connector。编辑器销毁或重开时会自动断开。 */
+  createConnector(options?: OnlyOfficeConnectorOptions): OnlyOfficeConnector {
+    if (!this.ready) {
+      throw new Error("OnlyOffice editor is not ready");
+    }
+    return this.editor.createConnector(options);
   }
 
   getLogger() {

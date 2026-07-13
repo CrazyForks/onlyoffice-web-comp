@@ -115,8 +115,10 @@ export type StaticResource = {
 };
 
 export type OnlyOfficeStaticResourceOptions = {
-  /** CDN packages 根地址，例如 https://770e15f8.onlyoffice-packages.pages.dev。 */
+  /** CDN packages 根地址，例如 https://a6006408.onlyoffice-packages.pages.dev。 */
   cdnOrigin?: string | null;
+  /** CDN 上的 OnlyOffice 目录版本；未传时使用当前 SDK 版本。 */
+  onlyofficeVersion?: string | null;
 };
 
 const X2T_PDF_DEFAULT_FONT_FILE = "Carlito-Regular.ttf";
@@ -174,7 +176,8 @@ export const X2T_PDF_FONT_MANIFEST = [
   },
 ] as const;
 
-const DEFAULT_ONLYOFFICE_VERSION = "9.3.0";
+/** 与 public/packages/onlyoffice 下的 Document Server 导出目录保持一致。 */
+const DEFAULT_ONLYOFFICE_VERSION = "9.4.0-develop";
 const DEFAULT_ONLYOFFICE_ROOT = `/packages/onlyoffice/${DEFAULT_ONLYOFFICE_VERSION}`;
 
 let staticResourceOptions: OnlyOfficeStaticResourceOptions | null = null;
@@ -189,8 +192,9 @@ function buildStaticResource(): StaticResource {
   const cdnOrigin = staticResourceOptions?.cdnOrigin
     ? trimTrailingSlash(staticResourceOptions.cdnOrigin)
     : "";
+  const onlyofficeVersion = staticResourceOptions?.onlyofficeVersion || DEFAULT_ONLYOFFICE_VERSION;
   const onlyofficeRoot = cdnOrigin
-    ? `${cdnOrigin}/onlyoffice/${DEFAULT_ONLYOFFICE_VERSION}`
+    ? `${cdnOrigin}/onlyoffice/${onlyofficeVersion}`
     : DEFAULT_ONLYOFFICE_ROOT;
   const x2tRoot = `${onlyofficeRoot}/x2t`;
   const x2tPdfFontsRoot = `${onlyofficeRoot}/x2t-fonts`;

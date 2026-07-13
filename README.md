@@ -27,7 +27,7 @@ The practical integration path is:
 2. Copy the static assets from [`public/packages/onlyoffice/`](public/packages/onlyoffice/) into your app's `public/packages/onlyoffice/` directory.
 3. Build your UI by following [`src/features/demo/office-preview-page.tsx`](src/features/demo/office-preview-page.tsx): create an editor container, keep an `OnlyOfficeManager` instance, call `openDocument`, `downloadExport`, `toggleReadOnly`, and destroy the manager on unmount.
 
-Static resource resolution is centralized in [`src/components/onlyoffice-web-comp/const/index.ts`](src/components/onlyoffice-web-comp/const/index.ts). By default it reads `/packages/onlyoffice/9.3.0`; to switch to a CDN, update the `cdnOrigin` used by `buildStaticResource`.
+Static resource resolution is centralized in [`src/components/onlyoffice-web-comp/const/index.ts`](src/components/onlyoffice-web-comp/const/index.ts). Both local and CDN modes use the Developer Edition Docker-exported 9.4 SDK at `/packages/onlyoffice/9.4.0-develop` by default; `onlyofficeVersion` can override the CDN directory when needed.
 
 ## Core Advantages
 
@@ -142,7 +142,7 @@ npx wrangler pages deploy public/packages \
 After deployment, the asset URL should look like:
 
 ```text
-https://<project>.pages.dev/onlyoffice/9.3.0/web-apps/apps/api/documents/api.js
+https://<project>.pages.dev/onlyoffice/9.4.0-develop/web-apps/apps/api/documents/api.js
 ```
 
 Use that Pages origin as the runtime resource root:

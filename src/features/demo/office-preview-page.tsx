@@ -33,6 +33,10 @@ import { DocxCommentsCrud } from "./docx-comments-crud";
 import { DocxRevisionsCrud } from "./docx-revisions-crud";
 import { getFileExtension, OFFICE_UPLOAD_ACCEPT } from "./office-formats";
 import {
+  createConnectorDemo,
+  type ConnectorDemo,
+} from "./connector-demo";
+import {
   applyDemoResourceMode,
   getDemoResourceState,
   ResourceSwitcher,
@@ -49,6 +53,11 @@ type OfficePreviewPageProps = {
   initialFileUrl?: string;
   /** 嵌入文档页或父容器时使用 h-full */
   embedded?: boolean;
+};
+
+type ConnectorMessage = {
+  text: string;
+  tone: "success" | "error";
 };
 
 function LoadingOverlay() {
@@ -91,6 +100,7 @@ export function OfficePreviewPage({
 }: OfficePreviewPageProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const managerRef = useRef<OnlyOfficeManager | null>(null);
+  const connectorRef = useRef<ConnectorDemo | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [readOnly, setReadOnly] = useState(false);
@@ -107,21 +117,39 @@ export function OfficePreviewPage({
     Math.round(OFFICE_XML_EVENT_CONFIG.default.limitBytes / 1024 / 1024),
   );
   const [editorReady, setEditorReady] = useState(false);
+  const [connectorMessage, setConnectorMessage] = useState<ConnectorMessage | null>(
+    null,
+  );
+  const connectorMessageTimerRef = useRef<number | null>(null);
   const [activeFileName, setActiveFileName] = useState(defaultFileName);
   const [cdnOrigin, setCdnOrigin] = useState(
     () => getDemoResourceState().cdnOrigin,
   );
   const [resourceRevision, setResourceRevision] = useState(0);
 
+  const replaceConnector = (manager: OnlyOfficeManager) => {
+    if (connectorRef.current?.isConnected) {
+      connectorRef.current.disconnect();
+    }
+    const connector = createConnectorDemo(() => manager);
+    connectorRef.current = connector;
+    return connector;
+  };
+
   useEffect(
     () =>
       subscribeDemoResourceChange((state) => {
         setCdnOrigin(state.cdnOrigin);
         setLoading(true);
+        if (connectorRef.current?.isConnected) {
+          connectorRef.current.disconnect();
+        }
+        connectorRef.current = null;
         managerRef.current?.destroy();
         managerRef.current = null;
         editorManagerFactory.destroy(ONLYOFFICE_ID);
         setActiveFileName(defaultFileName);
+        setConnectorMessage(null);
         setResourceRevision(state.revision);
       }),
     [defaultFileName],
@@ -185,6 +213,7 @@ export function OfficePreviewPage({
 
       ownedManager = manager;
       managerRef.current = manager;
+      replaceConnector(manager);
       setCurrentLangState(manager.getLanguage());
       setCurrentThemeState(manager.getTheme());
       setEditorReady(true);
@@ -205,12 +234,25 @@ export function OfficePreviewPage({
       disposed = true;
       unsubscribeLoading?.();
       ownedManager?.destroy();
+      if (connectorRef.current?.isConnected) {
+        connectorRef.current.disconnect();
+      }
+      connectorRef.current = null;
       editorManagerFactory.destroy(containerId);
       managerRef.current = null;
       setEditorReady(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resourceRevision]);
+
+  useEffect(
+    () => () => {
+      if (connectorMessageTimerRef.current !== null) {
+        window.clearTimeout(connectorMessageTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const runAction = async (action: () => Promise<void>, message: string) => {
     try {
@@ -220,6 +262,17 @@ export function OfficePreviewPage({
       setError(message);
       console.error(message, err);
     }
+  };
+
+  const showConnectorMessage = (text: string, tone: ConnectorMessage["tone"]) => {
+    if (connectorMessageTimerRef.current !== null) {
+      window.clearTimeout(connectorMessageTimerRef.current);
+    }
+    setConnectorMessage({ text, tone });
+    connectorMessageTimerRef.current = window.setTimeout(() => {
+      setConnectorMessage(null);
+      connectorMessageTimerRef.current = null;
+    }, 4_000);
   };
 
   const handleOpenDocument = (
@@ -241,8 +294,10 @@ export function OfficePreviewPage({
           limitBytes: officeXmlLimitMb * 1024 * 1024,
         },
       });
+      replaceConnector(manager);
       setActiveFileName(fileName);
       setReadOnly(nextReadOnly);
+      setConnectorMessage(null);
     }, "操作失败");
 
   const handleLanguageSwitch = () =>
@@ -278,6 +333,40 @@ export function OfficePreviewPage({
   const handlePrintLogs = () => {
     managerRef.current?.printLogs();
   };
+
+  const handleConnector = () =>
+    runAction(async () => {
+      const manager = managerRef.current;
+      if (!manager) {
+        throw new Error("Editor is not initialized");
+      }
+
+      const logger = manager.getLogger();
+      try {
+        logger.operation("Connector command started", {
+          fileName: activeFileName,
+          fileType,
+        });
+        const connector = connectorRef.current ?? replaceConnector(manager);
+        const result = await connector.write(activeFileName, fileType);
+        showConnectorMessage(result.message, "success");
+        logger.operation("Connector command completed", {
+          fileName: activeFileName,
+          fileType: result.fileType,
+        });
+      } catch (error) {
+        logger.error("operation", "Connector command failed", {
+          fileName: activeFileName,
+          fileType,
+          error,
+        });
+        showConnectorMessage(
+          error instanceof Error ? error.message : "Connector command failed",
+          "error",
+        );
+        throw error;
+      }
+    }, "连接器调用失败");
 
   const handleToggleReadOnly = () =>
     runAction(async () => {
@@ -319,6 +408,7 @@ export function OfficePreviewPage({
               <>
                 <DemoButton onClick={handleExport}>导出</DemoButton>
                 <DemoButton onClick={handlePrintLogs}>打印日志</DemoButton>
+                <DemoButton onClick={handleConnector}>连接器写入</DemoButton>
                 <DemoButton active={readOnly} onClick={handleToggleReadOnly}>
                   {readOnly ? "只读" : "编辑"}
                 </DemoButton>
@@ -403,7 +493,19 @@ export function OfficePreviewPage({
           </div>
         </div>
       </header>
-
+      {connectorMessage && (
+        <output
+          aria-live="polite"
+          className={`fixed top-4 left-1/2 z-50 -translate-x-1/2 rounded border px-4 py-2 text-sm shadow-lg ${
+            connectorMessage.tone === "success"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+              : "border-red-200 bg-red-50 text-red-800"
+          }`}
+          role="status"
+        >
+          {connectorMessage.text}
+        </output>
+      )}
       {error && (
         <div className="mx-4 mt-4 rounded border-l-4 border-red-500 bg-red-50 p-4 text-red-700">
           <p className="font-medium">错误：{error}</p>

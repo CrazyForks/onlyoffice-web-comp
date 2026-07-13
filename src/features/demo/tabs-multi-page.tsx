@@ -20,6 +20,10 @@ import {
 } from "./demo-toolbar";
 import { DocxCommentsCrud } from "./docx-comments-crud";
 import { DocxRevisionsCrud } from "./docx-revisions-crud";
+import {
+  createConnectorDemo,
+  type ConnectorDemo,
+} from "./connector-demo";
 import { getFileExtension } from "./office-formats";
 import {
   applyDemoResourceMode,
@@ -57,6 +61,11 @@ type TabItem = {
   fileName: string;
   readOnly: boolean;
   docKind: DocKind;
+};
+
+type ConnectorMessage = {
+  text: string;
+  tone: "success" | "error";
 };
 
 const DOC_PRESETS: Record<DocKind, DocPreset> = {
@@ -141,13 +150,48 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
   );
   const [resourceRevision, setResourceRevision] = useState(0);
   const initializedRef = useRef(new Set<string>());
+  const connectorsRef = useRef(new Map<string, ConnectorDemo>());
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const connectorMessageTimerRef = useRef<number | null>(null);
+  const [connectorMessage, setConnectorMessage] =
+    useState<ConnectorMessage | null>(null);
+
+  const removeTabConnector = (tabId: string) => {
+    const connector = connectorsRef.current.get(tabId);
+    if (connector?.isConnected) {
+      connector.disconnect();
+    }
+    connectorsRef.current.delete(tabId);
+  };
+
+  const replaceTabConnector = (
+    tabId: string,
+    manager: Awaited<ReturnType<typeof onlyOfficeManagerFactory.open>>,
+  ) => {
+    removeTabConnector(tabId);
+    const connector = createConnectorDemo(() => manager);
+    connectorsRef.current.set(tabId, connector);
+    return connector;
+  };
+
+  const showConnectorMessage = (text: string, tone: ConnectorMessage["tone"]) => {
+    if (connectorMessageTimerRef.current !== null) {
+      window.clearTimeout(connectorMessageTimerRef.current);
+    }
+    setConnectorMessage({ text, tone });
+    connectorMessageTimerRef.current = window.setTimeout(() => {
+      setConnectorMessage(null);
+      connectorMessageTimerRef.current = null;
+    }, 4_000);
+  };
 
   useEffect(
     () =>
       subscribeDemoResourceChange((state) => {
         setCdnOrigin(state.cdnOrigin);
         setLoading(true);
+        connectorsRef.current.forEach((connector) => connector.disconnect());
+        connectorsRef.current.clear();
         onlyOfficeManagerFactory.destroyAll();
         initializedRef.current.clear();
         setResourceRevision(state.revision);
@@ -188,7 +232,7 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
   const openTabEditor = async (tab: TabItem) => {
     const preset = getPreset(tab.docKind);
 
-    await onlyOfficeManagerFactory.open(
+    const manager = await onlyOfficeManagerFactory.open(
       {
         containerId: tab.containerId,
         fileType: preset.fileType,
@@ -204,6 +248,7 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
       },
     );
 
+    replaceTabConnector(tab.id, manager);
     initializedRef.current.add(tab.id);
   };
 
@@ -248,8 +293,13 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
         ONLYOFFICE_EVENT_KEYS.LOADING_CHANGE,
         handleLoadingChange,
       );
+      connectorsRef.current.forEach((connector) => connector.disconnect());
+      connectorsRef.current.clear();
       onlyOfficeManagerFactory.destroyAll();
       initializedRef.current.clear();
+      if (connectorMessageTimerRef.current !== null) {
+        window.clearTimeout(connectorMessageTimerRef.current);
+      }
     };
   }, []);
 
@@ -264,6 +314,7 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
 
     const tab = tabs.find((item) => item.id === tabId);
     if (tab) {
+      removeTabConnector(tab.id);
       onlyOfficeManagerFactory.destroy(tab.containerId);
       initializedRef.current.delete(tab.id);
     }
@@ -295,7 +346,7 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
 
       const preset = getPreset(activeTab.docKind);
 
-      await onlyOfficeManagerFactory.open(
+      const manager = await onlyOfficeManagerFactory.open(
         {
           containerId: activeTab.containerId,
           fileType: preset.fileType,
@@ -311,6 +362,7 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
         },
       );
 
+      replaceTabConnector(activeTab.id, manager);
       initializedRef.current.add(activeTab.id);
       updateTab(activeTab.id, { fileName: file.name });
     }, "上传失败");
@@ -321,7 +373,7 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
 
       const preset = getPreset(activeTab.docKind);
 
-      await onlyOfficeManagerFactory.open(
+      const manager = await onlyOfficeManagerFactory.open(
         {
           containerId: activeTab.containerId,
           fileType: preset.fileType,
@@ -337,6 +389,7 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
         },
       );
 
+      replaceTabConnector(activeTab.id, manager);
       initializedRef.current.add(activeTab.id);
       updateTab(activeTab.id, { fileName: preset.defaultFileName });
     }, "新建失败");
@@ -352,6 +405,48 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
       const manager = await ensureActiveManager();
       manager.printLogs();
     }, "打印日志失败");
+
+  const writeWithConnector = () =>
+    runAction(async () => {
+      if (!activeTab) throw new Error("No active tab");
+
+      const manager = await ensureActiveManager();
+      const logger = manager.getLogger();
+      let connector = connectorsRef.current.get(activeTab.id);
+      if (!connector) {
+        connector = replaceTabConnector(activeTab.id, manager);
+      }
+
+      try {
+        logger.operation("Connector command started", {
+          tabId: activeTab.id,
+          fileName: activeTab.fileName,
+          fileType: getPreset(activeTab.docKind).fileType,
+        });
+        const result = await connector.write(
+          activeTab.fileName,
+          getPreset(activeTab.docKind).fileType,
+        );
+        logger.operation("Connector command completed", {
+          tabId: activeTab.id,
+          fileName: activeTab.fileName,
+          fileType: result.fileType,
+        });
+        showConnectorMessage(result.message, "success");
+      } catch (error) {
+        logger.error("operation", "Connector command failed", {
+          tabId: activeTab.id,
+          fileName: activeTab.fileName,
+          fileType: getPreset(activeTab.docKind).fileType,
+          error,
+        });
+        showConnectorMessage(
+          error instanceof Error ? error.message : "Connector command failed",
+          "error",
+        );
+        throw error;
+      }
+    }, "连接器调用失败");
 
   const toggleReadOnly = () =>
     runAction(async () => {
@@ -435,6 +530,7 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
             </DemoButton>
             <DemoButton onClick={exportDocument}>导出</DemoButton>
             <DemoButton onClick={printActiveLogs}>打印日志</DemoButton>
+            <DemoButton onClick={writeWithConnector}>连接器写入</DemoButton>
             <DemoButton active={!!activeTab?.readOnly} onClick={toggleReadOnly}>
               {activeTab?.readOnly ? "只读" : "编辑"}
             </DemoButton>
@@ -577,6 +673,20 @@ export function TabsMultiPage({ embedded = false }: { embedded?: boolean }) {
           </div>
         </div>
       </header>
+
+      {connectorMessage && (
+        <output
+          aria-live="polite"
+          className={`fixed top-4 left-1/2 z-50 -translate-x-1/2 rounded border px-4 py-2 text-sm shadow-lg ${
+            connectorMessage.tone === "success"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+              : "border-red-200 bg-red-50 text-red-800"
+          }`}
+          role="status"
+        >
+          {connectorMessage.text}
+        </output>
+      )}
 
       {error && (
         <div className="mx-4 mt-4 rounded border-l-4 border-red-500 bg-red-50 p-3 text-sm text-red-700">

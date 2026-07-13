@@ -7,6 +7,7 @@ import {
   ONLYOFFICE_CONTAINER_CONFIG,
   ONLYOFFICE_EVENT_KEYS,
   OFFICE_THEME,
+  STATIC_RESOURCE,
   OnlyOfficeManager,
   editorManagerFactory,
   isOnlyOfficeCdnMode,
@@ -35,6 +36,34 @@ export const CONTAINER_IDS = {
 } as const;
 
 const DOCUMENT_READY_TIMEOUT_MS = 30_000;
+
+declare const Api: {
+  GetActiveSheet: () => {
+    GetRange: (address: string) => {
+      SetValue: (value: string) => void;
+    };
+  };
+  CreateRGBColor: (red: number, green: number, blue: number) => unknown;
+  CreateSolidFill: (color: unknown) => unknown;
+  CreateStroke: (width: number, fill: unknown) => unknown;
+  CreateShape: (
+    type: string,
+    width: number,
+    height: number,
+    fill: unknown,
+    stroke: unknown,
+  ) => {
+    SetPosition: (x: number, y: number) => void;
+    GetDocContent: () => {
+      GetContent: () => Array<{ AddText: (text: string) => void }>;
+    };
+  };
+  GetPresentation: () => {
+    GetCurrentSlide: () => {
+      AddObject: (shape: unknown) => void;
+    };
+  };
+};
 
 function waitForDocumentReady() {
   let timeoutId: number | undefined;
@@ -192,6 +221,14 @@ export async function runScenario(
     }
 
     assert(isOnlyOfficeCdnMode() === (mode === "cdn"), "CDN mode mismatch");
+    const expectedRoot =
+      mode === "cdn"
+        ? `${cdnOrigin}/onlyoffice/9.4.0-develop`
+        : "/packages/onlyoffice/9.4.0-develop";
+    assert(
+      STATIC_RESOURCE.onlyoffice.root === expectedRoot,
+      `Unexpected SDK root: ${STATIC_RESOURCE.onlyoffice.root}`,
+    );
     return mode === "cdn" ? cdnOrigin : "local packages";
   });
 
@@ -250,6 +287,28 @@ export async function runScenario(
 
     await withDocumentReady(() => manager.openNew("Factory-Reopened.docx"));
     await assertExport(manager, FILE_TYPE.DOCX);
+  });
+
+  await runStep("manager connector", async () => {
+    const manager = onlyOfficeManagerFactory.get(CONTAINER_IDS.factory);
+    assert(manager, "Factory manager is missing");
+
+    const connector = manager.createConnector();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          reject(new Error("Connector did not return within 10 seconds"));
+        }, 10_000);
+        connector.executeMethod("GetEditorType", [], () => {
+          window.clearTimeout(timeout);
+          resolve();
+        });
+      });
+    } finally {
+      connector.disconnect();
+    }
+
+    return "GetEditorType callback received";
   });
 
   await runStep("manager factory destroy", async () => {
@@ -335,6 +394,38 @@ export async function runScenario(
 
     assert(manager.isReady(), "OnlyOfficeManager.create was not ready");
     assert(manager.getEditor().exists(), "Created editor does not exist");
+    const connector = manager.createConnector();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          reject(new Error("Presentation connector did not return within 10 seconds"));
+        }, 10_000);
+        connector.callCommand(function () {
+          const fill = Api.CreateSolidFill(Api.CreateRGBColor(230, 247, 255));
+          const stroke = Api.CreateStroke(
+            0,
+            Api.CreateSolidFill(Api.CreateRGBColor(24, 144, 255)),
+          );
+          const shape = Api.CreateShape(
+            "rect",
+            7_200_000,
+            900_000,
+            fill,
+            stroke,
+          );
+          shape.SetPosition(1_000_000, 1_000_000);
+          shape
+            .GetDocContent()
+            .GetContent()[0]?.AddText("[Connector] wrote this text box.");
+          Api.GetPresentation().GetCurrentSlide().AddObject(shape);
+        }, () => {
+          window.clearTimeout(timeout);
+          resolve();
+        });
+      });
+    } finally {
+      connector.disconnect();
+    }
     await manager.toggleReadOnly();
     assert(manager.getReadOnly(), "toggleReadOnly failed");
     await assertExport(manager, FILE_TYPE.PPTX);
@@ -362,6 +453,46 @@ export async function runScenario(
     await assertExport(manager, FILE_TYPE.XLSX);
     manager.destroy();
     editorManagerFactory.destroy(CONTAINER_IDS.file);
+  });
+
+  await runStep("manager spreadsheet connector", async () => {
+    const file = await fetchPublicFile("/test.xlsx", "test.xlsx");
+    const manager = await withDocumentReady(() =>
+      OnlyOfficeManager.createWithFile(
+        {
+          containerId: CONTAINER_IDS.file,
+          fileType: FILE_TYPE.XLSX,
+          defaultFileName: file.name,
+          readOnly: false,
+          theme: DEFAULT_OFFICE_THEME,
+        },
+        file,
+      ),
+    );
+
+    const connector = manager.createConnector();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          reject(new Error("Spreadsheet connector did not return within 10 seconds"));
+        }, 10_000);
+        connector.callCommand(function () {
+          Api.GetActiveSheet()
+            .GetRange("A1")
+            .SetValue("[Connector] wrote this cell.");
+        }, () => {
+          window.clearTimeout(timeout);
+          resolve();
+        });
+      });
+      await assertExport(manager, FILE_TYPE.XLSX);
+    } finally {
+      connector.disconnect();
+      manager.destroy();
+      editorManagerFactory.destroy(CONTAINER_IDS.file);
+    }
+
+    return "Wrote [Connector] wrote this cell. to A1";
   });
 
   await runStep("text fallback files", async () => {

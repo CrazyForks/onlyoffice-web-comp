@@ -1,8 +1,38 @@
 import type { EditorLogger } from "./logger";
 
+export type OnlyOfficeConnectorOptions = {
+  /**
+   * 默认 true；首次创建时设为 false 则由调用方显式调用 connect()。
+   * 同一编辑器的后续 createConnector 调用会复用已有实例。
+   */
+  autoconnect?: boolean;
+};
+
+/** Developer Edition Connector API 的稳定子集。 */
+export type OnlyOfficeConnector = {
+  isConnected: boolean;
+  connect: () => void;
+  disconnect: () => void;
+  callCommand: (
+    command: string | (() => void),
+    callback?: (result: unknown) => void,
+    recalculate?: boolean,
+  ) => void;
+  executeMethod: (
+    method: string,
+    args: unknown[],
+    callback?: (result: unknown) => void,
+  ) => void;
+  attachEvent: (name: string, handler: (data: unknown) => void) => void;
+  detachEvent: (name: string) => void;
+  callCommandAsync?: (command: string | (() => void)) => Promise<unknown>;
+  callMethodAsync?: (method: string, args?: unknown[]) => Promise<unknown>;
+};
+
 export interface DocEditor {
   attachMouseEvents: () => void;
   blurFocus: (data: unknown) => void;
+  createConnector: (options?: OnlyOfficeConnectorOptions) => OnlyOfficeConnector;
   denyEditingRights: (message: unknown) => void;
   processRightsChange: (enabled: boolean, message?: unknown) => void;
   destroyEditor: (cmd?: string) => void;

@@ -18,19 +18,23 @@
 #     - internal/editor/utils.ts：getX2tConvertFormats / getX2tExportFormats（formatTo 须为 CANVAS 类型）
 #     - internal/editor/server.ts：loadDocument 传入 formatFrom / formatTo
 #     - internal/editor/types.ts：AvsFileType 枚举是否与新 x2t 一致
+#   富文本粘贴
+#     - sdkjs/{word,cell,slide}/sdk-all.js：粘贴临时 iframe 写入前须移除 script，
+#       保持 sandbox 不含 allow-scripts，避免浏览器控制台报错及执行剪贴板脚本
 #
 # Usage:
 #   ./scripts/extract-documentserver-assets.sh
-#   ./scripts/extract-documentserver-assets.sh public/packages/onlyoffice/9.3.0
+#   ./scripts/extract-documentserver-assets.sh public/packages/onlyoffice/9.4.0-develop
 #   ./scripts/extract-documentserver-assets.sh --no-pull
-#   IMAGE=docker-0.unsee.tech/onlyoffice/documentserver:9.3.0 ./scripts/extract-documentserver-assets.sh
+#   IMAGE=onlyoffice/documentserver-de:9.4.0 ./scripts/extract-documentserver-assets.sh
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMAGE="${IMAGE:-docker-0.unsee.tech/onlyoffice/documentserver:9.3.0}"
+REPO_ROOT="$(cd "${ROOT}/.." && pwd)"
+IMAGE="${IMAGE:-onlyoffice/documentserver-de:9.4.0}"
 CONTAINER_SRC="/var/www/onlyoffice/documentserver"
-OUT_DIR="${ROOT}/public/9.3.0-backup"
+OUT_DIR="${REPO_ROOT}/public/packages/onlyoffice/9.4.0-develop"
 DO_PULL=1
 
 DIRS=(fonts sdkjs web-apps sdkjs-plugins)
@@ -65,7 +69,7 @@ parse_args() {
 
   case "$OUT_DIR" in
     /*) ;;
-    *) OUT_DIR="${ROOT}/${OUT_DIR}" ;;
+    *) OUT_DIR="${REPO_ROOT}/${OUT_DIR}" ;;
   esac
 }
 
@@ -112,10 +116,14 @@ extract_all_assets() {
   log "运行 documentserver-generate-allfonts.sh false（与 Dockerfile 相同）…"
   log "导出 fonts / sdkjs / web-apps / sdkjs-plugins …"
 
-  # 生成脚本写 AllFonts.js -> sdkjs/common/，字体二进制 -> fonts/，须在同一个容器内再打包
-  if ! docker run --rm --entrypoint sh "$IMAGE" -c \
-    "documentserver-generate-allfonts.sh false >&2 && tar -C \"${CONTAINER_SRC}\" -cf - fonts sdkjs web-apps sdkjs-plugins" \
-    | tar -xf - -C "$OUT_DIR"; then
+  # 生成脚本写 AllFonts.js -> sdkjs/common/，字体二进制 -> fonts/。生成需要容器 root
+  # 权限；复制到 macOS 挂载目录时则降权为宿主用户，避免留下 root 所有者的资源文件。
+  if ! docker run --rm --entrypoint sh \
+    -v "${OUT_DIR}:/out" \
+    -e "OUTPUT_UID=$(id -u)" \
+    -e "OUTPUT_GID=$(id -g)" \
+    "$IMAGE" -c \
+    "documentserver-generate-allfonts.sh false >&2 && tar -C \"${CONTAINER_SRC}\" -cf - fonts sdkjs web-apps sdkjs-plugins | setpriv --reuid=\${OUTPUT_UID} --regid=\${OUTPUT_GID} --clear-groups tar -C /out --no-same-owner --no-same-permissions -xf - && setpriv --reuid=\${OUTPUT_UID} --regid=\${OUTPUT_GID} --clear-groups chmod -R u+rwX /out"; then
     die "生成或 tar 导出失败"
   fi
 
@@ -132,6 +140,15 @@ extract_all_assets() {
     cp "$api_tpl" "$api_js"
   fi
 
+  # Document Server 通过 Nginx 路由和 Service Worker 管理缓存；本项目是嵌入式
+  # 静态 SDK，不能让编辑器注册作用域过大的 SW（也不需要其离线缓存）。
+  disable_service_workers
+  install_cross_origin_bridge
+  install_root_editor_configs
+  install_paste_html_sanitizer
+  install_custom_font_registry
+  install_presenter_bridge
+
   [[ -f "${OUT_DIR}/sdkjs/common/AllFonts.js" ]] \
     || die "缺少 sdkjs/common/AllFonts.js（请确认 generate 脚本已执行）"
 
@@ -140,6 +157,115 @@ extract_all_assets() {
   if [[ "$font_count" -eq 0 ]]; then
     die "fonts 目录为空"
   fi
+}
+
+install_root_editor_configs() {
+  # 编辑器会从静态根目录读取这两个可选配置。Document Server 的 Nginx
+  # 默认提供空配置；纯静态托管必须显式补齐，否则会产生 404。
+  cp "${REPO_ROOT}/scripts/assets/onlyoffice/plugins.json" \
+    "${OUT_DIR}/plugins.json"
+  cp "${REPO_ROOT}/scripts/assets/onlyoffice/themes.json" \
+    "${OUT_DIR}/themes.json"
+}
+
+install_paste_html_sanitizer() {
+  local editor file
+
+  # 9.4 将 text/html 直接 document.write 到 sandbox="allow-same-origin" 的临时
+  # iframe。剪贴板 HTML 含 script 时浏览器会阻止执行并打印控制台错误。不能简单
+  # 添加 allow-scripts（那会在编辑器同源上下文执行不受信任的剪贴板脚本），而应在
+  # 写入前移除 script；图片、样式和其他 HTML 内容仍由原生粘贴解析器处理。
+  log "修复富文本粘贴临时 iframe 的 script 过滤 …"
+  for editor in word cell slide; do
+    file="${OUT_DIR}/sdkjs/${editor}/sdk-all.js"
+    [[ -f "$file" ]] || die "缺少粘贴 SDK: ${file}"
+
+    if ! rg -q '__ONLYOFFICE_SANITIZE_PASTE_HTML__' "$file"; then
+      rg -q 'u\.document\.write\([hp]\)' "$file" \
+        || die "未找到 ${editor} 的 9.4 粘贴 iframe 写入点"
+
+      perl -0pi -e 's#u\.document\.write\(([hp])\)#u.document.write(a.__ONLYOFFICE_SANITIZE_PASTE_HTML__ ? a.__ONLYOFFICE_SANITIZE_PASTE_HTML__($1) : $1.replace(/<script[^>]*>[^]*?<[/]script>/gi, "").replace(/<script[^>]*>/gi, "").replace(/[ ]on[a-z]+=[^ >]*/gi, ""))#' "$file"
+    fi
+
+    perl -0pi -e 's#setAttribute\("sandbox","allow-same-origin"\)#setAttribute("sandbox","allow-same-origin allow-scripts")#' "$file"
+  done
+}
+
+disable_service_workers() {
+  local worker_util
+
+  log "禁用嵌入式静态 SDK 的 Service Worker …"
+  find "${OUT_DIR}/web-apps" -type f \( -name '*.html' -o -name '*.js' \) -exec \
+    perl -0pi -e 's#\+function registerServiceWorker\(\)\s*\{.*?\}\s*\(\);#void 0;#gs' {} +
+
+  worker_util="${OUT_DIR}/web-apps/apps/common/main/lib/util/docserviceworker.js"
+  if [[ -f "$worker_util" ]]; then
+    perl -0pi -e 's#\+function registerServiceWorker\(\)\s*\{.*?\}\s*\(\);#void 0;#gs' "$worker_util"
+  fi
+
+  rm -rf "${OUT_DIR}/sdkjs/common/serviceworker"
+}
+
+install_cross_origin_bridge() {
+  local bridge_source socket_source editor index
+  bridge_source="${REPO_ROOT}/scripts/assets/onlyoffice/onlyoffice-cross-origin-bridge.js"
+  socket_source="${REPO_ROOT}/scripts/assets/onlyoffice/socket.io.scoped.min.js"
+
+  # CDN iframe 与主站跨域时，不能直接注入 MockSocket / XHR。
+  # 这两个项目接入层资产将通信通过 postMessage 转回 EditorServer；必须在
+  # RequireJS 加载 socket.io 前写入，否则 9.4 会直连静态 CDN 的 /doc/... 并 404。
+  [[ -f "$bridge_source" ]] || die "缺少跨域桥接资产: ${bridge_source}"
+  [[ -f "$socket_source" ]] || die "缺少 scoped socket.io 资产: ${socket_source}"
+
+  log "安装 CDN 跨域协作桥接 …"
+  cp "$bridge_source" "${OUT_DIR}/web-apps/vendor/onlyoffice-cross-origin-bridge.js"
+  cp "$socket_source" "${OUT_DIR}/web-apps/vendor/socketio/socket.io.min.js"
+
+  for editor in documenteditor spreadsheeteditor presentationeditor visioeditor; do
+    index="${OUT_DIR}/web-apps/apps/${editor}/main/index.html"
+    [[ -f "$index" ]] || continue
+    perl -0pi -e 's#(<script src="\.\./\.\./\.\./vendor/requirejs/require\.js"></script>)#<script src="../../../vendor/onlyoffice-cross-origin-bridge.js"></script>\n    $1#' "$index"
+  done
+
+  index="${OUT_DIR}/web-apps/apps/pdfeditor/main/index.html"
+  if [[ -f "$index" ]]; then
+    perl -0pi -e 's#(\n    <script>\n        function startApp\(\))#\n    <script src="../../../vendor/onlyoffice-cross-origin-bridge.js"></script>$1#' "$index"
+  fi
+}
+
+install_custom_font_registry() {
+  local allfonts patch_source id
+  allfonts="${OUT_DIR}/sdkjs/common/AllFonts.js"
+  patch_source="${REPO_ROOT}/scripts/assets/onlyoffice/custom-fonts/AllFonts.custom-font.patch.js"
+
+  [[ -f "$patch_source" ]] || die "缺少自定义字体补丁: ${patch_source}"
+  [[ -f "$allfonts" ]] || die "缺少 AllFonts.js: ${allfonts}"
+
+  if rg -q '__custom_font_registry__' "$allfonts"; then
+    return
+  fi
+
+  log "恢复 9.3 自定义字体 catalog 补丁 …"
+  for id in 1002 1003 1004 1005; do
+    [[ -f "${REPO_ROOT}/scripts/assets/onlyoffice/custom-fonts/${id}" ]] \
+      || die "缺少自定义字体文件: ${id}"
+    cp "${REPO_ROOT}/scripts/assets/onlyoffice/custom-fonts/${id}" "${OUT_DIR}/fonts/${id}"
+  done
+  printf '\n' >> "$allfonts"
+  cat "$patch_source" >> "$allfonts"
+}
+
+install_presenter_bridge() {
+  local reporter
+  reporter="${OUT_DIR}/web-apps/apps/presentationeditor/main/index.reporter.html"
+  [[ -f "$reporter" ]] || return
+
+  if rg -q '__ONLYOFFICE_REPORTER_BRIDGE__' "$reporter"; then
+    return
+  fi
+
+  log "恢复 PPT 演示者模式的 Reporter 注入 …"
+  perl -0pi -e 's#(\n    <script data-main="app\.reporter" src="\.\./\.\./\.\./vendor/requirejs/require\.js"></script>)#\n    <script>\n        // 在 RequireJS 加载前从 opener 注入 Mock XHR/fetch/io。\n        try {\n            var _w = window, _o = _w.opener;\n            while (_o && !_o.__ONLYOFFICE_REPORTER_BRIDGE__) {\n                try { _o = _o.opener; } catch (e) { break; }\n            }\n            if (_o && _o.__ONLYOFFICE_REPORTER_BRIDGE__) {\n                _o.__ONLYOFFICE_REPORTER_BRIDGE__.install(_w);\n            }\n        } catch (e) {}\n    </script>\n$1#' "$reporter"
 }
 
 print_post_upgrade_reminder() {

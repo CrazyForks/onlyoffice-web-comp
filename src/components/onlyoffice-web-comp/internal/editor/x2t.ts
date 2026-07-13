@@ -27,8 +27,6 @@ export class X2tConverter {
   private resourceKey = "";
   private logger?: EditorLogger;
 
-  constructor() {}
-
   private getWorkerStaticResource(): StaticResource {
     const staticResource = getStaticResource();
     if (typeof window === "undefined") {
@@ -277,7 +275,5 @@ export class X2tConverter {
   }
 }
 
-/**
- * @description 默认 x2t 转换器实例。
- */
+/** @description 浏览器端 Office 格式转换器。 */
 export const converter = new X2tConverter();

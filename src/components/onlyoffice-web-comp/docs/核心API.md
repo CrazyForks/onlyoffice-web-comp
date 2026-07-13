@@ -57,7 +57,7 @@ import {
 
 // packages 根地址，目录下应包含 onlyoffice/{version}/...
 OnlyOfficeManager.registerStaticResource({
-  cdnOrigin: "https://770e15f8.onlyoffice-packages.pages.dev",
+  cdnOrigin: "https://a6006408.onlyoffice-packages.pages.dev",
 });
 
 const resource = getStaticResource();
@@ -78,8 +78,10 @@ OnlyOfficeManager.resetStaticResource();
 
 ```typescript
 type OnlyOfficeStaticResourceOptions = {
-  /** CDN packages 根地址，例如 https://770e15f8.onlyoffice-packages.pages.dev */
+  /** CDN packages 根地址，例如 https://a6006408.onlyoffice-packages.pages.dev */
   cdnOrigin?: string | null;
+  /** CDN 的 SDK 版本；默认当前 9.4 SDK */
+  onlyofficeVersion?: string | null;
 };
 ```
 
@@ -99,11 +101,27 @@ type OnlyOfficeStaticResourceOptions = {
 | `exportDocument()` | 导出 bin 数据 |
 | `exportAsBlob()` | 导出为 Blob |
 | `downloadExport()` | 导出并触发浏览器下载 |
+| `createConnector(options?)` | 获取当前编辑器唯一的 Developer Edition Connector；销毁或重开编辑器时自动断开 |
 | `onLoadingChange(handler)` | 监听 loading，返回取消函数 |
 | `getEditor()` | 获取底层 `EditorManager` |
 | `getLogger()` | 获取当前实例的 `EditorLogger` |
 | `printLogs()` | 将当前实例日志历史打印到控制台 |
 | `destroy()` | 销毁实例 |
+
+### Developer Edition Connector
+
+`createConnector()` 返回当前编辑器唯一的 OnlyOffice Connector，用于从父页面调用编辑器的 Automation API。重复调用会返回同一实例（与 `getLogger()` 的生命周期一致），连接器会使用当前 iframe 的真实 `frameEditorId`，本地和 CDN 跨域模式均可用；编辑器销毁或重开文档时组件会自动断开并释放它。
+
+```typescript
+const connector = manager.createConnector();
+
+connector.executeMethod("GetEditorType", [], () => {
+  console.log("Connector request completed");
+});
+
+// 可提前释放；不调用也会在 manager.destroy() 时自动断开。
+connector.disconnect();
+```
 
 ### 实例日志
 
@@ -295,7 +313,7 @@ editorManagerFactory.destroyAll();
 }
 ```
 
-多实例下 `export()` 通过 `instanceId` 过滤 `SAVE_DOCUMENT` 事件。只读模式下直接返回已缓存的 `binData`。
+多实例下 `export()` 通过 `instanceId`（固定等于当前 `containerId`）过滤 `SAVE_DOCUMENT` 事件。只读模式下直接返回已缓存的 `binData`。
 
 ### 文档格式转换
 
