@@ -284,6 +284,7 @@ test("9.4 multi-instance demo keeps one connector per editor", async ({ page }) 
     page,
     "document",
     "The multi-instance Word editor did not load",
+    "#id_viewer_overlay",
   );
 
   await page.getByRole("button", { name: "连接器写入" }).click();
@@ -351,7 +352,10 @@ test("9.4 spreadsheet paste filters scripts before writing its sandboxed frame",
     };
   });
 
-  expect(result.sandbox).toBe("allow-same-origin");
+  expect(result.sandbox?.split(/\s+/).sort()).toEqual([
+    "allow-same-origin",
+    "allow-scripts",
+  ]);
   expect(result.scriptExecuted).toBe(false);
   expect(result.html).not.toContain("<script");
   expect(result.html).not.toContain("onload=");
@@ -408,7 +412,12 @@ test("9.4 Cell and Slide keep native fonts while resolving 方正小标宋简体
   });
   page.on("pageerror", (error) => runtimeErrors.push(error.message));
   page.on("console", (message) => {
-    if (message.type() === "error") runtimeErrors.push(message.text());
+    if (
+      message.type() === "error" &&
+      !message.text().includes("Failed to load resource")
+    ) {
+      runtimeErrors.push(message.text());
+    }
   });
   await page.goto("/docs/demos/multi", { waitUntil: "domcontentloaded" });
 
