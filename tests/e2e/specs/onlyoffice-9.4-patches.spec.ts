@@ -1,10 +1,38 @@
 import path from "node:path";
 import { expect, test } from "playwright/test";
 
+type OnlyOfficeRuntimeNamespace = Record<string, any>;
+
+declare global {
+  interface Window {
+    Asc?: OnlyOfficeRuntimeNamespace;
+    AscCommon?: OnlyOfficeRuntimeNamespace;
+    AscFonts?: OnlyOfficeRuntimeNamespace;
+    Common?: OnlyOfficeRuntimeNamespace;
+    DE?: OnlyOfficeRuntimeNamespace;
+  }
+}
+
 const assetOrigin = `http://${process.env.PLAYWRIGHT_HOST ?? "127.0.0.1"}:${
   process.env.PLAYWRIGHT_CDN_PORT ?? 3010
 }`;
 const deRoot = `${assetOrigin}/onlyoffice/9.4.0-develop`;
+
+const sampleCanvasChecksum = (element: HTMLElement | SVGElement) => {
+  const canvas = element as HTMLCanvasElement;
+  const context = canvas.getContext("2d");
+  const data = context?.getImageData(0, 0, canvas.width, canvas.height).data;
+  if (!data) return 0;
+  let checksum = 0;
+  for (let index = 0; index < data.length; index += 16) {
+    checksum = (checksum + data[index] + data[index + 1] + data[index + 2]) >>> 0;
+  }
+  return checksum;
+};
+
+const clickHtmlElement = (element: HTMLElement | SVGElement) => {
+  (element as HTMLElement).click();
+};
 
 test("9.4 DE serves root plugin and theme configs", async ({ page }) => {
   await page.goto(`${deRoot}/web-apps/apps/api/documents/preload.html`, {
@@ -140,16 +168,7 @@ test("9.4 demo calls the Developer Edition connector", async ({ page }) => {
   });
 
   const documentCanvas = editorFrame.locator("#id_viewer");
-  const before = await documentCanvas.evaluate((canvas) => {
-    const context = (canvas as HTMLCanvasElement).getContext("2d");
-    const data = context?.getImageData(0, 0, canvas.width, canvas.height).data;
-    if (!data) return 0;
-    let checksum = 0;
-    for (let index = 0; index < data.length; index += 16) {
-      checksum = (checksum + data[index] + data[index + 1] + data[index + 2]) >>> 0;
-    }
-    return checksum;
-  });
+  const before = await documentCanvas.evaluate(sampleCanvasChecksum);
 
   await page.getByRole("button", { name: "连接器写入" }).click();
   await expect(page.getByRole("status")).toHaveText(
@@ -158,17 +177,7 @@ test("9.4 demo calls the Developer Edition connector", async ({ page }) => {
   );
   await expect
     .poll(() =>
-      documentCanvas.evaluate((canvas) => {
-        const context = (canvas as HTMLCanvasElement).getContext("2d");
-        const data = context?.getImageData(0, 0, canvas.width, canvas.height).data;
-        if (!data) return 0;
-        let checksum = 0;
-        for (let index = 0; index < data.length; index += 16) {
-          checksum =
-            (checksum + data[index] + data[index + 1] + data[index + 2]) >>> 0;
-        }
-        return checksum;
-      }),
+      documentCanvas.evaluate(sampleCanvasChecksum),
     )
     .not.toBe(before);
 });
@@ -546,32 +555,14 @@ test("9.4 demo writes A1 after uploading an Excel workbook", async ({ page }) =>
     .toEqual({ resolvedName: "仿宋_GB2312", resolvedFile: "1003" });
   await expect.poll(() => customFontLoadedFromWorkbook).toBe(true);
 
-  const before = await worksheetCanvas.evaluate((canvas) => {
-    const context = (canvas as HTMLCanvasElement).getContext("2d");
-    const data = context?.getImageData(0, 0, canvas.width, canvas.height).data;
-    if (!data) return 0;
-    let checksum = 0;
-    for (let index = 0; index < data.length; index += 16) {
-      checksum = (checksum + data[index] + data[index + 1] + data[index + 2]) >>> 0;
-    }
-    return checksum;
-  });
+  const before = await worksheetCanvas.evaluate(sampleCanvasChecksum);
 
   // public/test.xlsx 的活动单元格 C4 已使用仿宋_GB2312。切换到 Arial 后
   // 画布必须变化；再切回 custom font 必须恢复原图，覆盖文件加载后的排版路径。
   await editorFrame.evaluate(() => window.Asc?.editor?.asc_setCellFontName?.("Arial"));
   await expect
     .poll(() =>
-      worksheetCanvas.evaluate((canvas) => {
-        const context = (canvas as HTMLCanvasElement).getContext("2d");
-        const data = context?.getImageData(0, 0, canvas.width, canvas.height).data;
-        if (!data) return 0;
-        let checksum = 0;
-        for (let index = 0; index < data.length; index += 16) {
-          checksum = (checksum + data[index] + data[index + 1] + data[index + 2]) >>> 0;
-        }
-        return checksum;
-      }),
+      worksheetCanvas.evaluate(sampleCanvasChecksum),
     )
     .not.toBe(before);
   await editorFrame.evaluate(() =>
@@ -579,16 +570,7 @@ test("9.4 demo writes A1 after uploading an Excel workbook", async ({ page }) =>
   );
   await expect
     .poll(() =>
-      worksheetCanvas.evaluate((canvas) => {
-        const context = (canvas as HTMLCanvasElement).getContext("2d");
-        const data = context?.getImageData(0, 0, canvas.width, canvas.height).data;
-        if (!data) return 0;
-        let checksum = 0;
-        for (let index = 0; index < data.length; index += 16) {
-          checksum = (checksum + data[index] + data[index + 1] + data[index + 2]) >>> 0;
-        }
-        return checksum;
-      }),
+      worksheetCanvas.evaluate(sampleCanvasChecksum),
     )
     .toBe(before);
 
@@ -598,17 +580,7 @@ test("9.4 demo writes A1 after uploading an Excel workbook", async ({ page }) =>
   });
   await expect
     .poll(() =>
-      worksheetCanvas.evaluate((canvas) => {
-        const context = (canvas as HTMLCanvasElement).getContext("2d");
-        const data = context?.getImageData(0, 0, canvas.width, canvas.height).data;
-        if (!data) return 0;
-        let checksum = 0;
-        for (let index = 0; index < data.length; index += 16) {
-          checksum =
-            (checksum + data[index] + data[index + 1] + data[index + 2]) >>> 0;
-        }
-        return checksum;
-      }),
+      worksheetCanvas.evaluate(sampleCanvasChecksum),
     )
     .not.toBe(before);
 });
@@ -676,38 +648,20 @@ test("9.4 Word loads built-in and 方正小标宋简体 fonts", async ({ page })
     `li[id="${customFontItemId}"] .font-item`,
   );
   await expect(customFontItem).toHaveCount(1);
-  await customFontItem.evaluate((element) => element.click());
+  await customFontItem.evaluate(clickHtmlElement);
   await expect(fontInput).toHaveValue("方正小标宋简体");
 
   const documentCanvas = editorFrame.locator("#id_viewer");
   const documentOverlay = editorFrame.locator("#id_viewer_overlay");
   await expect(documentCanvas).toBeVisible();
   await expect(documentOverlay).toBeVisible();
-  const before = await documentCanvas.evaluate((canvas) => {
-    const context = (canvas as HTMLCanvasElement).getContext("2d");
-    const data = context?.getImageData(0, 0, canvas.width, canvas.height).data;
-    if (!data) return 0;
-    let checksum = 0;
-    for (let index = 0; index < data.length; index += 16) {
-      checksum = (checksum + data[index] + data[index + 1] + data[index + 2]) >>> 0;
-    }
-    return checksum;
-  });
+  const before = await documentCanvas.evaluate(sampleCanvasChecksum);
 
   await documentOverlay.click({ position: { x: 120, y: 100 } });
   await page.keyboard.type("方正小标宋简体");
   await expect
     .poll(() =>
-      documentCanvas.evaluate((canvas) => {
-        const context = (canvas as HTMLCanvasElement).getContext("2d");
-        const data = context?.getImageData(0, 0, canvas.width, canvas.height).data;
-        if (!data) return 0;
-        let checksum = 0;
-        for (let index = 0; index < data.length; index += 16) {
-          checksum = (checksum + data[index] + data[index + 1] + data[index + 2]) >>> 0;
-        }
-        return checksum;
-      }),
+      documentCanvas.evaluate(sampleCanvasChecksum),
     )
     .not.toBe(before);
   await expect.poll(() => builtInFontBinaryLoaded).toBe(true);
@@ -773,7 +727,7 @@ test("9.4 Word rasterizes 方正小标宋简体 instead of the fallback font", a
       if (!itemId) throw new Error(`Missing ${fontName} in the font menu`);
       await fontCombo
         .locator(`li[id="${itemId}"] .font-item`)
-        .evaluate((element) => element.click());
+        .evaluate(clickHtmlElement);
       await expect(fontInput).toHaveValue(fontName);
     }
     await page.waitForTimeout(1_000);
