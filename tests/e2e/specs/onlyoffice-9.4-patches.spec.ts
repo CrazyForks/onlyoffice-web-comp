@@ -1,5 +1,5 @@
 import path from "node:path";
-import { expect, test } from "playwright/test";
+import { expect, test, type Frame, type Locator, type Page } from "playwright/test";
 
 type OnlyOfficeRuntimeNamespace = Record<string, any>;
 
@@ -17,6 +17,11 @@ const assetOrigin = `http://${process.env.PLAYWRIGHT_HOST ?? "127.0.0.1"}:${
   process.env.PLAYWRIGHT_CDN_PORT ?? 3010
 }`;
 const deRoot = `${assetOrigin}/onlyoffice/9.4.0-develop`;
+const editorFrameUrl = {
+  document: "/web-apps/apps/documenteditor/main/",
+  presentation: "/web-apps/apps/presentationeditor/main/",
+  spreadsheet: "/web-apps/apps/spreadsheeteditor/main/",
+} as const;
 
 const sampleCanvasChecksum = (element: HTMLElement | SVGElement) => {
   const canvas = element as HTMLCanvasElement;
@@ -32,6 +37,70 @@ const sampleCanvasChecksum = (element: HTMLElement | SVGElement) => {
 
 const clickHtmlElement = (element: HTMLElement | SVGElement) => {
   (element as HTMLElement).click();
+};
+
+const waitForEditorFrame = async (
+  page: Page,
+  editor: keyof typeof editorFrameUrl,
+  errorMessage: string,
+  readySelector?: string,
+) => {
+  const urlPart = editorFrameUrl[editor];
+  await expect
+    .poll(
+      () => page.frames().some((frame) => frame.url().includes(urlPart)),
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+
+  const frame = page.frames().find((item) => item.url().includes(urlPart));
+  if (!frame) throw new Error(errorMessage);
+
+  if (readySelector) {
+    await expect(frame.locator(readySelector)).toBeVisible({ timeout: 60_000 });
+  }
+  return frame;
+};
+
+const canvasChecksum = (canvas: Locator) => canvas.evaluate(sampleCanvasChecksum);
+
+const expectCanvasChanged = async (canvas: Locator, before: number) => {
+  await expect.poll(() => canvasChecksum(canvas)).not.toBe(before);
+};
+
+const expectCanvasRestored = async (canvas: Locator, before: number) => {
+  await expect.poll(() => canvasChecksum(canvas)).toBe(before);
+};
+
+const loadFontFromServer = (frame: Frame, fontName: string) =>
+  frame.evaluate((name) => {
+    const editor = window.Asc?.editor as {
+      asc_loadFontsFromServer?: (fontNames: string[]) => void;
+    } | undefined;
+    if (typeof editor?.asc_loadFontsFromServer !== "function") {
+      return false;
+    }
+    editor.asc_loadFontsFromServer([name]);
+    return true;
+  }, fontName);
+
+const selectToolbarFont = async (frame: Frame, fontName: string) => {
+  const fontCombo = frame.locator(".combobox.fonts");
+  const fontInput = fontCombo.locator('input[role="combobox"]');
+  await fontCombo.locator(".dropdown-toggle").click();
+  await expect(fontInput).toHaveAttribute("aria-expanded", "true");
+  const itemId = await frame.evaluate((name) =>
+    window.DE?.getController?.("Toolbar")
+      ?.getView?.("Toolbar")
+      ?.cmbFontName?.store?.findWhere?.({ name })
+      ?.get?.("id"),
+    fontName,
+  );
+  if (!itemId) throw new Error(`Missing ${fontName} in the font menu`);
+  const fontItem = fontCombo.locator(`li[id="${itemId}"] .font-item`);
+  await expect(fontItem).toHaveCount(1);
+  await fontItem.evaluate(clickHtmlElement);
+  await expect(fontInput).toHaveValue(fontName);
 };
 
 test("9.4 DE serves root plugin and theme configs", async ({ page }) => {
@@ -148,38 +217,23 @@ test("9.4 DE presenter view installs the opener bridge before RequireJS", async 
 
 test("9.4 demo calls the Developer Edition connector", async ({ page }) => {
   await page.goto("/docs/demos/single", { waitUntil: "domcontentloaded" });
-  await expect
-    .poll(() =>
-      page
-        .frames()
-        .some((frame) => frame.url().includes("/web-apps/apps/documenteditor/main/")),
-    )
-    .toBe(true);
-
-  const editorFrame = page
-    .frames()
-    .find((frame) => frame.url().includes("/web-apps/apps/documenteditor/main/"));
-  if (!editorFrame) {
-    throw new Error("The 9.4 Word editor iframe did not load");
-  }
   // iframe 创建完成不代表编辑器已开始处理 Connector 消息；等待文档画布就绪。
-  await expect(editorFrame.locator("#id_viewer_overlay")).toBeVisible({
-    timeout: 60_000,
-  });
+  const editorFrame = await waitForEditorFrame(
+    page,
+    "document",
+    "The 9.4 Word editor iframe did not load",
+    "#id_viewer_overlay",
+  );
 
   const documentCanvas = editorFrame.locator("#id_viewer");
-  const before = await documentCanvas.evaluate(sampleCanvasChecksum);
+  const before = await canvasChecksum(documentCanvas);
 
   await page.getByRole("button", { name: "连接器写入" }).click();
   await expect(page.getByRole("status")).toHaveText(
     "Connector: inserted a paragraph",
     { timeout: 10_000 },
   );
-  await expect
-    .poll(() =>
-      documentCanvas.evaluate(sampleCanvasChecksum),
-    )
-    .not.toBe(before);
+  await expectCanvasChanged(documentCanvas, before);
 });
 
 test("9.4 Word exports PDF through the compatible x2t pair", async ({ page }) => {
@@ -200,22 +254,12 @@ test("9.4 Word exports PDF through the compatible x2t pair", async ({ page }) =>
   });
 
   await page.goto("/docs/demos/single", { waitUntil: "domcontentloaded" });
-  await expect
-    .poll(() =>
-      page
-        .frames()
-        .some((frame) => frame.url().includes("/web-apps/apps/documenteditor/main/")),
-    )
-    .toBe(true);
-  const editorFrame = page
-    .frames()
-    .find((frame) => frame.url().includes("/web-apps/apps/documenteditor/main/"));
-  if (!editorFrame) {
-    throw new Error("The 9.4 Word editor iframe did not load");
-  }
-  await expect(editorFrame.locator("#id_viewer_overlay")).toBeVisible({
-    timeout: 60_000,
-  });
+  const editorFrame = await waitForEditorFrame(
+    page,
+    "document",
+    "The 9.4 Word editor iframe did not load",
+    "#id_viewer_overlay",
+  );
 
   await editorFrame.getByRole("tab", { name: "文件" }).click();
   await editorFrame.locator("a.menu-item").filter({ hasText: "下载为" }).click();
@@ -236,13 +280,11 @@ test("9.4 Word exports PDF through the compatible x2t pair", async ({ page }) =>
 
 test("9.4 multi-instance demo keeps one connector per editor", async ({ page }) => {
   await page.goto("/docs/demos/multi", { waitUntil: "domcontentloaded" });
-  await expect
-    .poll(() =>
-      page
-        .frames()
-        .some((frame) => frame.url().includes("/web-apps/apps/documenteditor/main/")),
-    )
-    .toBe(true);
+  await waitForEditorFrame(
+    page,
+    "document",
+    "The multi-instance Word editor did not load",
+  );
 
   await page.getByRole("button", { name: "连接器写入" }).click();
   await expect(page.getByRole("status")).toHaveText(
@@ -251,23 +293,12 @@ test("9.4 multi-instance demo keeps one connector per editor", async ({ page }) 
   );
 
   await page.getByTitle("新建 Excel 标签页").click();
-  await expect
-    .poll(() =>
-      page
-        .frames()
-        .some((frame) => frame.url().includes("/web-apps/apps/spreadsheeteditor/main/")),
-      { timeout: 60_000 },
-    )
-    .toBe(true);
-  const spreadsheetFrame = page
-    .frames()
-    .find((frame) => frame.url().includes("/web-apps/apps/spreadsheeteditor/main/"));
-  if (!spreadsheetFrame) {
-    throw new Error("The multi-instance Excel editor did not load");
-  }
-  await expect(spreadsheetFrame.locator("#editor_sdk")).toBeVisible({
-    timeout: 60_000,
-  });
+  await waitForEditorFrame(
+    page,
+    "spreadsheet",
+    "The multi-instance Excel editor did not load",
+    "#editor_sdk",
+  );
   await page.getByRole("button", { name: "连接器写入" }).click();
   await expect(page.getByRole("status")).toHaveText("Connector: wrote to A1", {
     timeout: 10_000,
@@ -279,24 +310,12 @@ test("9.4 spreadsheet paste filters scripts before writing its sandboxed frame",
 }) => {
   await page.goto("/docs/demos/multi", { waitUntil: "domcontentloaded" });
   await page.getByTitle("新建 Excel 标签页").click();
-  await expect
-    .poll(() =>
-      page
-        .frames()
-        .some((frame) => frame.url().includes("/spreadsheeteditor/main/")),
-      { timeout: 60_000 },
-    )
-    .toBe(true);
-
-  const spreadsheetFrame = page
-    .frames()
-    .find((frame) => frame.url().includes("/spreadsheeteditor/main/"));
-  if (!spreadsheetFrame) {
-    throw new Error("The spreadsheet editor iframe did not load");
-  }
-  await expect(spreadsheetFrame.locator("#editor_sdk")).toBeVisible({
-    timeout: 60_000,
-  });
+  const spreadsheetFrame = await waitForEditorFrame(
+    page,
+    "spreadsheet",
+    "The spreadsheet editor iframe did not load",
+    "#editor_sdk",
+  );
   await expect
     .poll(() =>
       spreadsheetFrame.evaluate(() => {
@@ -349,21 +368,11 @@ test("9.4 Word selects the 仿宋_GB2312 custom-font alias without invalid thumb
   page.on("pageerror", (error) => runtimeErrors.push(error.message));
 
   await page.goto("/docs/demos/single", { waitUntil: "domcontentloaded" });
-  await expect
-    .poll(() =>
-      page
-        .frames()
-        .some((frame) => frame.url().includes("/documenteditor/main/")),
-      { timeout: 60_000 },
-    )
-    .toBe(true);
-
-  const documentFrame = page
-    .frames()
-    .find((frame) => frame.url().includes("/documenteditor/main/"));
-  if (!documentFrame) {
-    throw new Error("The document editor iframe did not load");
-  }
+  const documentFrame = await waitForEditorFrame(
+    page,
+    "document",
+    "The document editor iframe did not load",
+  );
   await expect
     .poll(() =>
       documentFrame.evaluate(() =>
@@ -404,21 +413,12 @@ test("9.4 Cell and Slide keep native fonts while resolving 方正小标宋简体
   await page.goto("/docs/demos/multi", { waitUntil: "domcontentloaded" });
 
   await page.getByTitle("新建 Excel 标签页").click();
-  await expect
-    .poll(() =>
-      page
-        .frames()
-        .some((frame) => frame.url().includes("/web-apps/apps/spreadsheeteditor/main/")),
-      { timeout: 60_000 },
-    )
-    .toBe(true);
-  const spreadsheetFrame = page
-    .frames()
-    .find((frame) => frame.url().includes("/web-apps/apps/spreadsheeteditor/main/"));
-  if (!spreadsheetFrame) throw new Error("The Excel editor did not load");
-  await expect(spreadsheetFrame.locator("#editor_sdk")).toBeVisible({
-    timeout: 60_000,
-  });
+  const spreadsheetFrame = await waitForEditorFrame(
+    page,
+    "spreadsheet",
+    "The Excel editor did not load",
+    "#editor_sdk",
+  );
   await expect
     .poll(() =>
       spreadsheetFrame.evaluate(() => ({
@@ -442,35 +442,15 @@ test("9.4 Cell and Slide keep native fonts while resolving 方正小标宋简体
 
   // 使用编辑器公开 API 验证实际异步加载器会请求 custom binary；避免刚创建
   // tab 时的初始化遮罩让 UI click 的时序主导测试结果。
-  expect(
-    await spreadsheetFrame.evaluate(() => {
-      const editor = window.Asc?.editor as {
-        asc_loadFontsFromServer?: (fontNames: string[]) => void;
-      };
-      if (typeof editor.asc_loadFontsFromServer !== "function") {
-        return false;
-      }
-      editor.asc_loadFontsFromServer(["方正小标宋简体"]);
-      return true;
-    }),
-  ).toBe(true);
+  expect(await loadFontFromServer(spreadsheetFrame, "方正小标宋简体")).toBe(true);
 
   await page.getByTitle("新建 PPT 标签页").click();
-  await expect
-    .poll(() =>
-      page
-        .frames()
-        .some((frame) => frame.url().includes("/web-apps/apps/presentationeditor/main/")),
-      { timeout: 60_000 },
-    )
-    .toBe(true);
-  const presentationFrame = page
-    .frames()
-    .find((frame) => frame.url().includes("/web-apps/apps/presentationeditor/main/"));
-  if (!presentationFrame) throw new Error("The PPT editor did not load");
-  await expect(presentationFrame.locator("#editor_sdk")).toBeVisible({
-    timeout: 60_000,
-  });
+  const presentationFrame = await waitForEditorFrame(
+    page,
+    "presentation",
+    "The PPT editor did not load",
+    "#editor_sdk",
+  );
   await expect
     .poll(() =>
       presentationFrame.evaluate(() => ({
@@ -493,18 +473,7 @@ test("9.4 Cell and Slide keep native fonts while resolving 方正小标宋简体
       native: "1002",
       arial: "022",
     });
-  expect(
-    await presentationFrame.evaluate(() => {
-      const editor = window.Asc?.editor as {
-        asc_loadFontsFromServer?: (fontNames: string[]) => void;
-      };
-      if (typeof editor.asc_loadFontsFromServer !== "function") {
-        return false;
-      }
-      editor.asc_loadFontsFromServer(["方正小标宋简体"]);
-      return true;
-    }),
-  ).toBe(true);
+  expect(await loadFontFromServer(presentationFrame, "方正小标宋简体")).toBe(true);
   await expect.poll(() => customFontBinaryLoaded).toBe(true);
   expect(runtimeErrors).toEqual([]);
 });
@@ -521,23 +490,12 @@ test("9.4 demo writes A1 after uploading an Excel workbook", async ({ page }) =>
   await page.getByRole("button", { name: "上传" }).click();
   await (await fileChooser).setFiles(path.join(process.cwd(), "public/test.xlsx"));
 
-  await expect
-    .poll(() =>
-      page
-        .frames()
-        .some((frame) => frame.url().includes("/web-apps/apps/spreadsheeteditor/main/")),
-      { timeout: 60_000 },
-    )
-    .toBe(true);
-  const editorFrame = page
-    .frames()
-    .find((frame) => frame.url().includes("/web-apps/apps/spreadsheeteditor/main/"));
-  if (!editorFrame) {
-    throw new Error("The uploaded XLSX did not open in the spreadsheet editor");
-  }
-  await expect(editorFrame.locator("#editor_sdk")).toBeVisible({
-    timeout: 60_000,
-  });
+  const editorFrame = await waitForEditorFrame(
+    page,
+    "spreadsheet",
+    "The uploaded XLSX did not open in the spreadsheet editor",
+    "#editor_sdk",
+  );
   const worksheetCanvas = editorFrame.locator("#ws-canvas");
   await expect(worksheetCanvas).toBeVisible();
   await expect(editorFrame.locator('input[aria-label="字体 "]')).toHaveValue(
@@ -555,34 +513,22 @@ test("9.4 demo writes A1 after uploading an Excel workbook", async ({ page }) =>
     .toEqual({ resolvedName: "仿宋_GB2312", resolvedFile: "1003" });
   await expect.poll(() => customFontLoadedFromWorkbook).toBe(true);
 
-  const before = await worksheetCanvas.evaluate(sampleCanvasChecksum);
+  const before = await canvasChecksum(worksheetCanvas);
 
   // public/test.xlsx 的活动单元格 C4 已使用仿宋_GB2312。切换到 Arial 后
   // 画布必须变化；再切回 custom font 必须恢复原图，覆盖文件加载后的排版路径。
   await editorFrame.evaluate(() => window.Asc?.editor?.asc_setCellFontName?.("Arial"));
-  await expect
-    .poll(() =>
-      worksheetCanvas.evaluate(sampleCanvasChecksum),
-    )
-    .not.toBe(before);
+  await expectCanvasChanged(worksheetCanvas, before);
   await editorFrame.evaluate(() =>
     window.Asc?.editor?.asc_setCellFontName?.("仿宋_GB2312"),
   );
-  await expect
-    .poll(() =>
-      worksheetCanvas.evaluate(sampleCanvasChecksum),
-    )
-    .toBe(before);
+  await expectCanvasRestored(worksheetCanvas, before);
 
   await page.getByRole("button", { name: "连接器写入" }).click();
   await expect(page.getByRole("status")).toHaveText("Connector: wrote to A1", {
     timeout: 10_000,
   });
-  await expect
-    .poll(() =>
-      worksheetCanvas.evaluate(sampleCanvasChecksum),
-    )
-    .not.toBe(before);
+  await expectCanvasChanged(worksheetCanvas, before);
 });
 
 test("9.4 Word loads built-in and 方正小标宋简体 fonts", async ({ page }) => {
@@ -603,23 +549,13 @@ test("9.4 Word loads built-in and 方正小标宋简体 fonts", async ({ page })
 
   await page.goto("/docs/demos/single", { waitUntil: "domcontentloaded" });
 
-  await expect
-    .poll(() =>
-      page
-        .frames()
-        .some((frame) => frame.url().includes("/web-apps/apps/documenteditor/main/")),
-    )
-    .toBe(true);
-
-  const editorFrame = page
-    .frames()
-    .find((frame) => frame.url().includes("/web-apps/apps/documenteditor/main/"));
-  if (!editorFrame) {
-    throw new Error("The 9.4 Word editor iframe did not load");
-  }
+  const editorFrame = await waitForEditorFrame(
+    page,
+    "document",
+    "The 9.4 Word editor iframe did not load",
+  );
 
   const fontCombo = editorFrame.locator(".combobox.fonts");
-  const fontInput = fontCombo.locator('input[role="combobox"]');
   await expect(fontCombo).toBeVisible({ timeout: 60_000 });
   await expect
     .poll(() =>
@@ -633,37 +569,17 @@ test("9.4 Word loads built-in and 方正小标宋简体 fonts", async ({ page })
       ),
     )
     .toBe(true);
-  await fontCombo.locator(".dropdown-toggle").click();
-  await expect(fontInput).toHaveAttribute("aria-expanded", "true");
-
-  const customFontItemId = await editorFrame.evaluate(() =>
-    window.DE?.getController?.("Toolbar")
-      ?.getView?.("Toolbar")
-      ?.cmbFontName?.store?.findWhere?.({ name: "方正小标宋简体" })
-      ?.get?.("id"),
-  );
-  expect(customFontItemId).toEqual(expect.any(String));
-
-  const customFontItem = fontCombo.locator(
-    `li[id="${customFontItemId}"] .font-item`,
-  );
-  await expect(customFontItem).toHaveCount(1);
-  await customFontItem.evaluate(clickHtmlElement);
-  await expect(fontInput).toHaveValue("方正小标宋简体");
+  await selectToolbarFont(editorFrame, "方正小标宋简体");
 
   const documentCanvas = editorFrame.locator("#id_viewer");
   const documentOverlay = editorFrame.locator("#id_viewer_overlay");
   await expect(documentCanvas).toBeVisible();
   await expect(documentOverlay).toBeVisible();
-  const before = await documentCanvas.evaluate(sampleCanvasChecksum);
+  const before = await canvasChecksum(documentCanvas);
 
   await documentOverlay.click({ position: { x: 120, y: 100 } });
   await page.keyboard.type("方正小标宋简体");
-  await expect
-    .poll(() =>
-      documentCanvas.evaluate(sampleCanvasChecksum),
-    )
-    .not.toBe(before);
+  await expectCanvasChanged(documentCanvas, before);
   await expect.poll(() => builtInFontBinaryLoaded).toBe(true);
   await expect.poll(() => customFontBinaryLoaded).toBe(true);
 });
@@ -678,17 +594,11 @@ test("9.4 Word rasterizes 方正小标宋简体 instead of the fallback font", a
       }
     });
     await page.goto("/docs/demos/single", { waitUntil: "domcontentloaded" });
-    await expect
-      .poll(() =>
-        page
-          .frames()
-          .some((frame) => frame.url().includes("/web-apps/apps/documenteditor/main/")),
-      )
-      .toBe(true);
-    const frame = page
-      .frames()
-      .find((item) => item.url().includes("/web-apps/apps/documenteditor/main/"));
-    if (!frame) throw new Error("The 9.4 Word editor iframe did not load");
+    const frame = await waitForEditorFrame(
+      page,
+      "document",
+      "The 9.4 Word editor iframe did not load",
+    );
     const overlay = frame.locator("#id_viewer_overlay");
     await expect(overlay).toBeVisible();
     await frame.evaluate(() => {
@@ -714,21 +624,7 @@ test("9.4 Word rasterizes 方正小标宋简体 instead of the fallback font", a
     await page.keyboard.type("东莞市人民政府");
     if (fontName) {
       await page.keyboard.press("ControlOrMeta+A");
-      const fontCombo = frame.locator(".combobox.fonts");
-      const fontInput = fontCombo.locator('input[role="combobox"]');
-      await fontCombo.locator(".dropdown-toggle").click();
-      const itemId = await frame.evaluate((name) =>
-        window.DE?.getController?.("Toolbar")
-          ?.getView?.("Toolbar")
-          ?.cmbFontName?.store?.findWhere?.({ name })
-          ?.get?.("id"),
-        fontName,
-      );
-      if (!itemId) throw new Error(`Missing ${fontName} in the font menu`);
-      await fontCombo
-        .locator(`li[id="${itemId}"] .font-item`)
-        .evaluate(clickHtmlElement);
-      await expect(fontInput).toHaveValue(fontName);
+      await selectToolbarFont(frame, fontName);
     }
     await page.waitForTimeout(1_000);
     const canvases = await frame.evaluate(() =>
