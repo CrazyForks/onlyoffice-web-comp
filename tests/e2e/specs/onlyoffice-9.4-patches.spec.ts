@@ -236,7 +236,7 @@ test("9.4 demo calls the Developer Edition connector", async ({ page }) => {
   await expectCanvasChanged(documentCanvas, before);
 });
 
-test("9.4 Word exports PDF through the compatible x2t pair", async ({ page }) => {
+test("9.4 Word exports PDF through the bundled x2t assets", async ({ page }) => {
   const x2tRequests: string[] = [];
   const exportErrors: string[] = [];
   page.on("request", (request) => {
@@ -271,8 +271,8 @@ test("9.4 Word exports PDF through the compatible x2t pair", async ({ page }) =>
   await expect.poll(() => download.failure()).toBeNull();
   expect(x2tRequests).toEqual(
     expect.arrayContaining([
-      expect.stringContaining("/packages/onlyoffice/9.3.0/x2t/x2t.js"),
-      expect.stringContaining("/packages/onlyoffice/9.3.0/x2t/x2t.wasm"),
+      expect.stringContaining("/packages/onlyoffice/9.4.0-develop/x2t/x2t.js"),
+      expect.stringContaining("/packages/onlyoffice/9.4.0-develop/x2t/x2t.wasm"),
     ]),
   );
   expect(exportErrors).toEqual([]);
