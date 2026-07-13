@@ -68,13 +68,8 @@ export function createConnectorDemo(
     async write(fileName, fallback) {
       const fileType = getActiveConnectorFileType(fileName, fallback);
       if (!connector.isConnected) connector.connect();
-      await new Promise<void>((resolve, reject) => {
-        const timer = window.setTimeout(
-          () => reject(new Error("Connector request timed out")),
-          5_000,
-        );
+      await new Promise<void>((resolve) => {
         connector.callCommand(getConnectorCommand(fileType), () => {
-          window.clearTimeout(timer);
           resolve();
         });
       });
