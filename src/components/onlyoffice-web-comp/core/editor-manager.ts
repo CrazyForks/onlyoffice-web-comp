@@ -1484,7 +1484,7 @@ export class EditorManager {
               fileName,
               instanceId: this.instanceId,
               containerId: this.containerId,
-              error,
+              error: error instanceof Error ? error.message : String(error),
             });
           });
         },
@@ -1867,6 +1867,23 @@ export class EditorManager {
       this.pendingRename = { resolve, reject, timer };
 
       try {
+        if (isOnlyOfficeCdnMode()) {
+          void callCrossOriginEditor(
+            this.containerId,
+            CROSS_ORIGIN_EDITOR_COMMAND.DOCUMENT_RENAME,
+            { fileName: requestedName },
+          )
+            .then(() => {
+              // 跨域 bridge 只能确认 iframe 已调用 SDK API；原生「文件 → 重命名」
+              // 路径不一定把 WOPI RPC 回包转回父页。由宿主提交标题，确保导出
+              // 快照与当前文件名同步；若 RPC 已先到达，pendingRename 已被清空。
+              if (this.pendingRename) {
+                this.server.rename(requestedName);
+              }
+            })
+            .catch((error) => this.rejectPendingRename(error));
+          return;
+        }
 
         const api = this.requireSdkApi();
         if (!api.asc_wopi_renameFile) {
