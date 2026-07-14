@@ -1476,18 +1476,18 @@ export class EditorManager {
         // DocsAPI 仅在注册此回调时暴露「文件 → 重命名」入口。
         // 回调由 OnlyOffice 的内部 Gateway 发出；标题显示已由 iframe 更新，
         // 使用 iframe 内 asc_wopi_renameFile 发起 RPC，由内存服务按 WOPI 协议回包。
-        onRequestRename: (event: { data?: unknown }) => {
-          const fileName =
-            typeof event.data === "string" ? event.data : "";
-          void this.renameDocument(fileName).catch((error) => {
-            this.logger.error("operation", "OnlyOffice document rename failed", {
-              fileName,
-              instanceId: this.instanceId,
-              containerId: this.containerId,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          });
-        },
+        // onRequestRename: (event: { data?: unknown }) => {
+        //   const fileName =
+        //     typeof event.data === "string" ? event.data : "";
+        //   void this.renameDocument(fileName).catch((error) => {
+        //     this.logger.error("operation", "OnlyOffice document rename failed", {
+        //       fileName,
+        //       instanceId: this.instanceId,
+        //       containerId: this.containerId,
+        //       error: error instanceof Error ? error.message : String(error),
+        //     });
+        //   });
+        // },
         // 不注册 onSave/onSaveDocument：内部保存已禁用，导出统一走 export() → downloadAs。
         onDownloadAs: () => {
           // Required so DocsAPI.downloadAs can request the current editor binary.
