@@ -1082,11 +1082,14 @@ export class EditorServer {
     };
   }
 
-  openNew(fileType?: string) {
+  openNew(fileType?: string, fileName?: string) {
     this.fileType = fileType || "docx";
     this.id = randomId();
     this.loadPromise = null;
-    this.title = ensureTitleWithExtension("New Document", this.fileType);
+    this.title = ensureTitleWithExtension(
+      fileName || "New Document",
+      this.fileType,
+    );
     const documentType = getDocumentType(this.fileType);
 
     let binData: Uint8Array | null = null;
@@ -1158,6 +1161,20 @@ export class EditorServer {
       title: this.title,
       url: this.urlsMap.get("Editor.bin") || this.getCacheFileUrl("Editor.bin"),
     };
+  }
+
+  /**
+   * @description 更新当前内存文档标题。文件内容与 document key 保持不变。
+   */
+  rename(fileName: string) {
+    const requestedName = fileName.trim();
+    if (!requestedName) {
+      throw new Error("OnlyOffice document name cannot be empty");
+    }
+
+    this.title = ensureTitleWithExtension(requestedName, this.fileType);
+    this.options.onDocumentRename?.(this.title);
+    return this.title;
   }
 
   /**
@@ -2073,6 +2090,35 @@ export class EditorServer {
         const message = (msg as { message?: Record<string, unknown> }).message;
         if (message?.c === "imgurls") {
           void this.handleImgUrls(socket, message);
+        }
+        break;
+      }
+      case "rpc": {
+        const rpc = msg.data as Record<string, unknown> | undefined;
+        if (rpc?.type !== "wopi_RenameFile") {
+          break;
+        }
+
+        const responseKey = msg.responseKey;
+        if (typeof responseKey !== "number") {
+          break;
+        }
+
+        try {
+          const title = this.rename(String(rpc.name ?? ""));
+          const extension = getFileExt(title);
+          const name = extension
+            ? title.slice(0, -(extension.length + 1))
+            : title;
+
+          // asc_wopi_renameFile 期望 { Name }，SDK 会自行补回当前扩展名并广播 asc_onMeta。
+          send({ type: "rpc", responseKey, data: { Name: name } });
+        } catch (error) {
+          this.logRaw("warn", "socket", "wopi rename failed", [
+            "[EditorServer] wopi rename failed:",
+            error,
+          ]);
+          send({ type: "rpc", responseKey, data: null });
         }
         break;
       }

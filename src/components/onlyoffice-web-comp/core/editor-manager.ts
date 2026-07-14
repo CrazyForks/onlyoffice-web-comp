@@ -65,6 +65,7 @@ import {
   prepareRevisionReviewDisplay,
 } from "../feature/revisions";
 import { getOnlyOfficeLang, type OnlyOfficeLang } from "../store/lang";
+import { getDocumentObj, setDocumentObj } from "../store/document";
 import { initializeOnlyOffice } from "../util/initialize";
 import {
   removeOfficeXmlSizeLimitOverlay,
@@ -139,6 +140,8 @@ type OnlyOfficeSdkApi = {
   pluginMethod_InputText?: (text: string) => void;
   pluginMethod_PasteText?: (text: string) => void;
   asc_AddText?: (text: string) => void;
+  /** OnlyOffice 内部 WOPI 重命名通道；通过 socket rpc 请求宿主重命名。 */
+  asc_wopi_renameFile?: (fileName: string) => void;
 };
 
 /** iframe 内运行时；混淆字段见 type/sdk-internal.ts，asc_* 为公开 API */
@@ -194,6 +197,13 @@ export class EditorManager {
   private officeXmlSizeLimitOverlayTeardown: (() => void) | null = null;
   private officeXmlSizeLimitPayload: OfficeXmlSizeLimitExceededPayload | null =
     null;
+  private pendingRename:
+    | {
+        resolve: (fileName: string) => void;
+        reject: (error: Error) => void;
+        timer: number;
+      }
+    | null = null;
 
   constructor(containerId = ONLYOFFICE_ID) {
     this.containerId = containerId;
@@ -208,6 +218,9 @@ export class EditorManager {
       },
       onLoadError: (error) => {
         this.handleServerLoadError(error);
+      },
+      onDocumentRename: (fileName) => {
+        this.syncRenamedDocument(fileName);
       },
     });
   }
@@ -1460,6 +1473,21 @@ export class EditorManager {
             this.dirty = true;
           }
         },
+        // DocsAPI 仅在注册此回调时暴露「文件 → 重命名」入口。
+        // 回调由 OnlyOffice 的内部 Gateway 发出；标题显示已由 iframe 更新，
+        // 使用 iframe 内 asc_wopi_renameFile 发起 RPC，由内存服务按 WOPI 协议回包。
+        onRequestRename: (event: { data?: unknown }) => {
+          const fileName =
+            typeof event.data === "string" ? event.data : "";
+          void this.renameDocument(fileName).catch((error) => {
+            this.logger.error("operation", "OnlyOffice document rename failed", {
+              fileName,
+              instanceId: this.instanceId,
+              containerId: this.containerId,
+              error,
+            });
+          });
+        },
         // 不注册 onSave/onSaveDocument：内部保存已禁用，导出统一走 export() → downloadAs。
         onDownloadAs: () => {
           // Required so DocsAPI.downloadAs can request the current editor binary.
@@ -1623,7 +1651,7 @@ export class EditorManager {
     this.teardownWordContentSync();
 
     if (options.isNew) {
-      this.server.openNew(fileType);
+      this.server.openNew(fileType, options.fileName);
     } else if (options.file) {
       await this.server.open(options.file, {
         fileName: options.fileName,
@@ -1808,6 +1836,86 @@ export class EditorManager {
 
   getFileName() {
     return this.fileName;
+  }
+
+  /**
+   * @description 通过 iframe 内 asc_wopi_renameFile 重命名当前实例。
+  * SDK 经 socket rpc 收到内存 WOPI 回包后才更新本地标题，因此返回 Promise。
+   */
+  renameDocument(fileName: string): Promise<string> {
+    const requestedName =
+      typeof fileName === "string" ? fileName.trim() : "";
+    if (!requestedName) {
+      return Promise.reject(
+        new Error("OnlyOffice document name cannot be empty"),
+      );
+    }
+
+    if (this.pendingRename) {
+      return Promise.reject(new Error("OnlyOffice document rename is pending"));
+    }
+
+    return new Promise<string>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        if (this.pendingRename?.timer !== timer) {
+          return;
+        }
+        this.pendingRename = null;
+        reject(new Error("OnlyOffice document rename timed out"));
+      }, 5000);
+
+      this.pendingRename = { resolve, reject, timer };
+
+      try {
+
+        const api = this.requireSdkApi();
+        if (!api.asc_wopi_renameFile) {
+          throw new Error("OnlyOffice WOPI rename API is not available");
+        }
+        api.asc_wopi_renameFile(requestedName);
+      } catch (error) {
+        this.rejectPendingRename(error);
+      }
+    });
+  }
+
+  private syncRenamedDocument(renamedFileName: string) {
+    this.fileName = renamedFileName;
+
+    const document = getDocumentObj(this.containerId);
+    setDocumentObj(
+      {
+        ...document,
+        fileName: renamedFileName,
+      },
+      this.containerId,
+    );
+
+    const pendingRename = this.pendingRename;
+    if (pendingRename) {
+      window.clearTimeout(pendingRename.timer);
+      this.pendingRename = null;
+      pendingRename.resolve(renamedFileName);
+    }
+
+    this.logger.operation("OnlyOffice document renamed through WOPI RPC", {
+      fileName: renamedFileName,
+      instanceId: this.instanceId,
+      containerId: this.containerId,
+    });
+  }
+
+  private rejectPendingRename(error: unknown) {
+    const pendingRename = this.pendingRename;
+    if (!pendingRename) {
+      return;
+    }
+
+    window.clearTimeout(pendingRename.timer);
+    this.pendingRename = null;
+    pendingRename.reject(
+      error instanceof Error ? error : new Error(String(error)),
+    );
   }
 
   getContainerParentSelector() {
@@ -2469,6 +2577,7 @@ export class EditorManager {
   }
 
   destroy() {
+    this.rejectPendingRename(new Error("OnlyOffice editor was destroyed"));
     if (this.userSaveTimer !== null) {
       window.clearTimeout(this.userSaveTimer);
       this.userSaveTimer = null;
