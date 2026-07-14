@@ -10,6 +10,7 @@
   };
   var EDITOR_COMMAND = {
     EDITOR_SUBSCRIBE: "editor:subscribe",
+    DOCUMENT_RENAME: "document:rename",
     COMMENT_ADD: "comment:add",
     COMMENT_UPDATE: "comment:update",
     COMMENT_REMOVE: "comment:remove",
@@ -1598,6 +1599,15 @@
     switch (command) {
       case EDITOR_COMMAND.EDITOR_SUBSCRIBE:
         return registerEditorCallback(api, payload && payload.event);
+      case EDITOR_COMMAND.DOCUMENT_RENAME:
+        if (!payload || !payload.fileName) {
+          throw new Error("Document file name is required");
+        }
+        if (typeof api.asc_wopi_renameFile !== "function") {
+          throw new Error("OnlyOffice WOPI rename API is not available");
+        }
+        api.asc_wopi_renameFile(String(payload.fileName));
+        return true;
       case EDITOR_COMMAND.COMMENT_ADD: {
         var data = payload && payload.data ? payload.data : {};
         return (

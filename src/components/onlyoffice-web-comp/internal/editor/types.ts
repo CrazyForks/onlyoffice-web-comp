@@ -345,6 +345,8 @@ export function isOfficeXmlSizeLimitExceededError(
 export interface ServerOptions {
   getState?: () => { readOnly?: boolean };
   logger?: EditorLogger;
+  /** WOPI 重命名 RPC 成功后的回调，携带 SDK 最终采用的完整文件名。 */
+  onDocumentRename?: (fileName: string) => void;
   /**
    * @description 用户触发保存（非 export/downloadAs 导出）时回调，携带最新文档快照。
    */
