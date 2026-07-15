@@ -385,12 +385,6 @@ window["__custom_font_registry__"] = {
  * 在 AllFonts.js 中紧接 registry 定义之后执行（SDK 初始化前）。
  */
 (function () {
-  // AllFonts.js 可能因同一编辑器的文档切换再次执行。font catalog 是 iframe
-  // 级全局状态，重复追加相同 registry 会导致 SDK 再次投递完整字体集合。
-  if (window.__CUSTOM_FONT_REGISTRY_APPLIED__) {
-    return;
-  }
-
   var registry = window.__custom_font_registry__;
   var files = window.__fonts_files;
   var infos = window.__fonts_infos;
@@ -459,7 +453,6 @@ window["__custom_font_registry__"] = {
       return row.slice();
     }),
   };
-  window.__CUSTOM_FONT_REGISTRY_APPLIED__ = true;
 })();
 
 // 字体 catalog 属于 iframe 运行时而非单个文档。Word 在打开/刷新文档时会
