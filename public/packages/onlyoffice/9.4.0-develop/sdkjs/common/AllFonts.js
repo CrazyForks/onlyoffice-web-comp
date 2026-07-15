@@ -455,6 +455,128 @@ window["__custom_font_registry__"] = {
   };
 })();
 
+// 字体 catalog 属于 iframe 运行时而非单个文档。Word 在打开/刷新文档时会
+// 再次广播同一份 fonts:load；ComboBoxFonts 使用新的内部 id 合并，因此会把
+// 整套字体追加第二次。让同一 iframe 只消费首个完整 catalog，文档切换继续
+// 复用既有字体/缩略图缓存。
+(function (window) {
+  var state =
+    window.__ONLYOFFICE_FONT_CATALOG_STATE__ ||
+    (window.__ONLYOFFICE_FONT_CATALOG_STATE__ = { delivered: false });
+  function install(notification) {
+    if (!notification || notification.__ONLYOFFICE_FONT_CATALOG_ONCE__) {
+      return;
+    }
+    var trigger = notification.trigger;
+    notification.trigger = function (eventName) {
+      if (eventName === "fonts:load" && arguments.length > 1) {
+        if (state.delivered) {
+          return this;
+        }
+        state.delivered = true;
+      }
+      return trigger.apply(this, arguments);
+    };
+    notification.__ONLYOFFICE_FONT_CATALOG_ONCE__ = true;
+  }
+
+  function observeCommon(common) {
+    if (!common) {
+      return;
+    }
+    if (common.NotificationCenter) {
+      install(common.NotificationCenter);
+      return;
+    }
+    // AllFonts 先于 web-apps 加载；拦截 NotificationCenter 的首次赋值，确保
+    // 其同步首轮 fonts:load 也经过上面的全局去重状态。
+    var descriptor = Object.getOwnPropertyDescriptor(common, "NotificationCenter");
+    if (descriptor && !descriptor.configurable) {
+      return;
+    }
+    var value;
+    Object.defineProperty(common, "NotificationCenter", {
+      configurable: true,
+      enumerable: true,
+      get: function () {
+        return value;
+      },
+      set: function (next) {
+        value = next;
+        install(next);
+      },
+    });
+  }
+
+  function reconcileFontComboStore() {
+    var toolbar =
+      window.DE &&
+      typeof window.DE.getController === "function" &&
+      window.DE.getController("Toolbar");
+    var view = toolbar && typeof toolbar.getView === "function" && toolbar.getView("Toolbar");
+    var combo = view && view.cmbFontName;
+    var store = combo && combo.store;
+    if (!store || !Array.isArray(store.models)) {
+      return;
+    }
+
+    var seen = {};
+    var models = [];
+    var duplicated = false;
+    for (var index = 0; index < store.models.length; index++) {
+      var model = store.models[index];
+      var type = model && typeof model.get === "function" ? model.get("type") : undefined;
+      var name = model && typeof model.get === "function" ? model.get("name") : "";
+      // type=1 是完整字体 catalog；type=4 是 OnlyOffice 的最近字体，保留它。
+      if (type === 1 && name) {
+        if (seen[name]) {
+          duplicated = true;
+          continue;
+        }
+        seen[name] = true;
+      }
+      models.push(model);
+    }
+    if (!duplicated) {
+      return;
+    }
+
+    store.reset(models);
+    combo.tiles = [];
+    if (combo.scroller) {
+      combo.scroller.destroy();
+      delete combo.scroller;
+    }
+    combo._scrollerIsInited = false;
+    combo.rendered = false;
+    combo.render(window.$(combo.el));
+    combo._fontsArray = store.toJSON();
+  }
+
+  // 仅在 SDK 真正追加重复 catalog 后重建；正常打开/滚动没有额外工作。
+  window.setInterval(reconcileFontComboStore, 50);
+
+  if (window.Common) {
+    observeCommon(window.Common);
+    return;
+  }
+
+  var commonDescriptor = Object.getOwnPropertyDescriptor(window, "Common");
+  if (!commonDescriptor || commonDescriptor.configurable) {
+    var commonValue;
+    Object.defineProperty(window, "Common", {
+      configurable: true,
+      get: function () {
+        return commonValue;
+      },
+      set: function (next) {
+        commonValue = next;
+        observeCommon(next);
+      },
+    });
+  }
+})(window);
+
 // 9.4 已直接从上面的 __fonts_files / __fonts_infos 构建 XDc / Vbb。
 // web-apps 比 SDK 晚加载，单独刷新 ComboBox 的搜索缓存即可；不改写字体
 // 加载器、二进制流或文档排版管线，避免影响 OnlyOffice 自带字体渲染。
@@ -521,12 +643,21 @@ window["__custom_font_registry__"] = {
         return;
       }
       if (!store || typeof store.each !== "function") return;
+      var emptyModels = [];
       store.each(function (model) {
         if (!model || typeof model.get !== "function") return;
+        var name = model.get("name");
+        if (typeof name !== "string" || !name.trim()) {
+          emptyModels.push(model);
+          return;
+        }
         var idx = model.get("imgidx");
         if (typeof idx !== "number" || !isFinite(idx) || idx < 0 || idx > 512) {
           model.set("imgidx", 0, { silent: true });
         }
+      });
+      emptyModels.forEach(function (model) {
+        store.remove(model);
       });
     }
 
@@ -543,13 +674,149 @@ window["__custom_font_registry__"] = {
       });
     }
 
+    function isRegisteredCustomFontName(name) {
+      for (var id in registry) {
+        if (!Object.prototype.hasOwnProperty.call(registry, id)) continue;
+        var names = Array.isArray(registry[id]) ? registry[id] : [];
+        if (names.indexOf(name) >= 0) return true;
+      }
+      return false;
+    }
+
     function patchSpriteThumbDecoder(combo) {
       var sprite = combo && combo.spriteThumbs;
-      if (!sprite || typeof sprite.getImage !== "function" || sprite.__CUSTOM_FONT_SPRITE_GUARD__) {
+      if (
+        !sprite ||
+        typeof sprite.getImage !== "function" ||
+        sprite.getImage.__CUSTOM_FONT_DYNAMIC_TILE_RENDERER__
+      ) {
         return;
       }
       var origGetImage = sprite.getImage;
+      var previewFonts = {};
+      var fontXorKey = [160, 102, 214, 32, 20, 150, 71, 250, 149, 105, 184, 80, 176, 65, 73, 72];
+
+      function isCustomFontName(name) {
+        for (var id in registry) {
+          if (!Object.prototype.hasOwnProperty.call(registry, id)) continue;
+          var names = Array.isArray(registry[id]) ? registry[id] : [];
+          if (names.indexOf(name) >= 0) return true;
+        }
+        return false;
+      }
+
+      function getCustomFontId(name) {
+        for (var id in registry) {
+          if (!Object.prototype.hasOwnProperty.call(registry, id)) continue;
+          var names = Array.isArray(registry[id]) ? registry[id] : [];
+          if (names.indexOf(name) >= 0) return id;
+        }
+        return null;
+      }
+
+      function refreshVisibleTiles(combo) {
+        window.setTimeout(function () {
+          if (!combo || (typeof combo.isMenuOpen === "function" && !combo.isMenuOpen())) {
+            return;
+          }
+          combo.flushVisibleFontsTiles();
+          combo.updateVisibleFontsTiles();
+        }, 0);
+      }
+
+      function loadPreviewFont(id, combo) {
+        if (!id || !window.FontFace || !window.fetch) return null;
+        var state = previewFonts[id];
+        if (state) return state;
+
+        state = {
+          family: "OnlyOfficeCustomPreview_" + id,
+          loaded: false,
+        };
+        previewFonts[id] = state;
+        state.promise = window
+          .fetch(new URL("../../../../fonts/" + id, window.location.href).href)
+          .then(function (response) {
+            if (!response.ok) throw new Error("Failed to load custom font preview");
+            return response.arrayBuffer();
+          })
+          .then(function (buffer) {
+            var bytes = new Uint8Array(buffer);
+            for (var index = 0; index < Math.min(32, bytes.length); index++) {
+              bytes[index] ^= fontXorKey[index % fontXorKey.length];
+            }
+            return new FontFace(state.family, bytes.buffer).load();
+          })
+          .then(function (face) {
+            document.fonts.add(face);
+            state.loaded = true;
+            refreshVisibleTiles(combo);
+          })
+          .catch(function () {
+            state.failed = true;
+          });
+        return state;
+      }
+
+      function getCustomFontName(index) {
+        var catalog = window.AscFonts && window.AscFonts.Vbb;
+        if (!Array.isArray(catalog)) return null;
+        for (var i = 0; i < catalog.length; i++) {
+          var entry = catalog[i];
+          if (entry && entry.Vri === index && isCustomFontName(entry.xa)) {
+            return entry.xa;
+          }
+        }
+        return null;
+      }
+
+      function createCustomFontThumbnail(name) {
+        // PPT 首次展开字体菜单时 sprite 图片可能仍在解码，width/height 都是
+        // 0。使用 OnlyOffice tile 的固定 CSS 尺寸，避免生成 0×0 canvas。
+        var tileWidth = sprite.width || 300;
+        var tileHeight = sprite.heightOne || sprite.height || 28;
+        var fontId = getCustomFontId(name);
+        var preview = loadPreviewFont(fontId, combo);
+        // ComboBoxFonts 的虚拟列表会在关闭时移除返回的 canvas。必须为每个
+        // getImage() 调用创建新节点，不能缓存或复用，否则第二次打开时
+        // flushVisibleFontsTiles 会对 parentNode === null 的旧节点 removeChild。
+        var canvas = document.createElement("canvas");
+        canvas.width = tileWidth;
+        canvas.height = tileHeight;
+        // 原生 getImage() 的 canvas 使用设备像素作为 width/height，但在 CSS
+        // 中固定为 300×28。保持同一尺寸契约，避免高 DPR 下占满菜单行或
+        // 让 hover 区域与内置字体不一致。
+        var scale = tileWidth / 300 || 1;
+        canvas.style.width = canvas.width / scale + "px";
+        canvas.style.height = canvas.height / scale + "px";
+        canvas.style.pointerEvents = "none";
+        var context = canvas.getContext("2d");
+        if (!context) return canvas;
+
+        // 保持透明底色，font-item 的原生 hover 背景才能透出。
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = "#000000";
+        context.textBaseline = "middle";
+        var size = Math.floor(canvas.height * 0.64);
+        do {
+          context.font = size + "px " + (preview && preview.loaded ? preview.family : "Arial");
+          if (context.measureText(name).width <= canvas.width) break;
+          size -= 1;
+        } while (size > 8);
+        // 与原生 fonts_thumbnail 保持 18 CSS px 左侧留白。
+        context.fillText(name, Math.round(18 * scale), canvas.height / 2);
+        return canvas;
+      }
+
       sprite.getImage = function (index) {
+        // Vri 是 SDK catalog 分配给自定义字体的缩略图索引。静态 sprite
+        // 没有这些 tile，原实现会把越界索引钳制到 0（Abyssinica SIL）。
+        // 在原生 sprite API 层补齐对应 canvas，保留虚拟列表的节点和流程。
+        var customFontName = getCustomFontName(index);
+        if (customFontName) {
+          sprite.__CUSTOM_FONT_DYNAMIC_TILE_NAMES__[index] = customFontName;
+          return createCustomFontThumbnail(customFontName);
+        }
         // updateVisibleFontsTiles 会将 imgidx/r 传到这里。部分自定义字体的
         // imgidx 实为字节偏移（33600 / 134400），且可在 store 清理后的
         // 虚拟滚动回调中才出现；在最终解码入口钳制才是可靠边界。
@@ -570,7 +837,14 @@ window["__custom_font_registry__"] = {
         args[0] = index;
         return origGetImage.apply(this, args);
       };
+      // Excel / PPT 会在 ComboBox 构造的后半段替换实例 getImage()；不能只用
+      // sprite 级布尔值判断是否已 patch。标记具体函数，若 SDK 覆盖它，下一次
+      // updateVisibleFontsTiles 会以新的原生实现为基准重新包裹。
+      sprite.getImage.__CUSTOM_FONT_DYNAMIC_TILE_RENDERER__ = true;
       sprite.__CUSTOM_FONT_SPRITE_GUARD__ = true;
+      sprite.__CUSTOM_FONT_DYNAMIC_TILES__ = true;
+      sprite.__CUSTOM_FONT_DYNAMIC_TILE_NAMES__ = {};
+      sprite.__CUSTOM_FONT_CREATE_TILE__ = createCustomFontThumbnail;
     }
 
     if (typeof proto.selectCandidate === "function") {
@@ -631,12 +905,48 @@ window["__custom_font_registry__"] = {
 
     if (typeof proto.updateVisibleFontsTiles === "function") {
       var origUpdateVisibleFontsTiles = proto.updateVisibleFontsTiles;
+
+      function syncRegisteredCustomFontTiles(combo) {
+        if (!combo || !combo.el || !combo.store || !combo.spriteThumbs || !Array.isArray(combo.tiles)) {
+          return;
+        }
+        var createTile = combo.spriteThumbs.__CUSTOM_FONT_CREATE_TILE__;
+        if (typeof createTile !== "function") {
+          return;
+        }
+        combo.store.each(function (model, index) {
+          var name = model && model.get && model.get("name");
+          if (!isRegisteredCustomFontName(name)) {
+            return;
+          }
+          var id = model.get("id");
+          var item = combo.el.querySelector("li[id='" + id + "']");
+          var anchor = item && item.querySelector("a.font-item");
+          if (!anchor) {
+            return;
+          }
+          var oldTile = combo.tiles[index];
+          if (oldTile && oldTile.parentNode) {
+            oldTile.parentNode.removeChild(oldTile);
+          }
+          var extraTiles = anchor.querySelectorAll("canvas");
+          for (var tileIndex = extraTiles.length - 1; tileIndex >= 0; tileIndex--) {
+            extraTiles[tileIndex].parentNode.removeChild(extraTiles[tileIndex]);
+          }
+          var tile = createTile(name);
+          combo.tiles[index] = tile;
+          anchor.appendChild(tile);
+        });
+      }
+
       proto.updateVisibleFontsTiles = function () {
         sanitizeStore(this.store);
         forceSafeSpriteIndexes(this.store);
         patchSpriteThumbDecoder(this);
         try {
-          return origUpdateVisibleFontsTiles.apply(this, arguments);
+          var result = origUpdateVisibleFontsTiles.apply(this, arguments);
+          syncRegisteredCustomFontTiles(this);
+          return result;
         } catch (err) {
           // 个别 DOCX 的字体列表会在菜单打开时由 SDK 异步补项；若该补项
           // 恰好携带 font file offset，第一次渲染仍可能命中旧值。清理后仅
@@ -646,7 +956,9 @@ window["__custom_font_registry__"] = {
             /Invalid typed array length/.test(String(err && err.message))
           ) {
             forceSafeSpriteIndexes(this.store);
-            return origUpdateVisibleFontsTiles.apply(this, arguments);
+            var retryResult = origUpdateVisibleFontsTiles.apply(this, arguments);
+            syncRegisteredCustomFontTiles(this);
+            return retryResult;
           }
           throw err;
         }
